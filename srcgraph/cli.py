@@ -1,4 +1,4 @@
-"""srcgraph command line: build, query, the presets importers and callers, and scope."""
+"""srcgraph command line: build, query, serve, the presets importers and callers, and scope."""
 import argparse
 import json
 import sys
@@ -7,6 +7,8 @@ from srcgraph import __version__
 from srcgraph.graph import Graph
 from srcgraph.scan import DEFAULT_EXCLUDES, scan
 from srcgraph.selectors import SelectorError, compile_selector
+from srcgraph.serve import make_server
+from srcgraph.source import Source
 
 DB = ".srcgraph/graph.lbug"
 # Presets: the common questions without Cypher. name -> (help, empty message, cypher over $name and $prefix)
@@ -32,10 +34,18 @@ def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="srcgraph", description="Source code in, a queryable two-tier knowledge graph out.")
     p.add_argument("--version", action="version", version=__version__)
     sub = p.add_subparsers(dest="command", required=True)
-    b = sub.add_parser("build", help="build the graph database")
-    b.add_argument("--src", action="append", help="source root (repeatable; default .)")
-    b.add_argument("--exclude", action="append", default=[], help="extra exclude name or glob (repeatable)")
-    b.add_argument("--db", default=DB, help=f"graph database file (default {DB})")
+
+    def common(sp):
+        sp.add_argument("--src", action="append", help="source root (repeatable; default .)")
+        sp.add_argument("--exclude", action="append", default=[], help="extra exclude name or glob (repeatable)")
+        sp.add_argument("--db", default=DB, help=f"graph database file (default {DB})")
+
+    common(sub.add_parser("build", help="build the graph database"))
+    s = sub.add_parser("serve", help="build, then open the explorer in the browser")
+    common(s)
+    s.add_argument("--port", type=int, default=8765)
+    s.add_argument("--no-build", action="store_true", help="serve the existing database")
+    s.add_argument("--allow-query", action="store_true", help="enable POST /api/query (raw Cypher)")
     q = sub.add_parser("query", help="run Cypher against the last built graph")
     q.add_argument("--db", default=DB)
     q.add_argument("--format", choices=["text", "json"], default="text")
@@ -115,12 +125,30 @@ def _run(args, out, err) -> int:
             return 1
         _print(rows, args.format, out)
         return 0
-    graph, warnings = build(args.src or ["."], DEFAULT_EXCLUDES + tuple(args.exclude), args.db)
+    if args.command == "serve" and args.no_build:
+        graph, warnings = Graph.open(args.db, read_only=True), []
+    else:
+        graph, warnings = build(args.src or ["."], DEFAULT_EXCLUDES + tuple(args.exclude), args.db)
     with graph:
         for w in warnings:
             print(f"warning: {w}", file=err)
+        if args.command == "serve":
+            return serve(graph, Source((args.src or ["."])[0]), args.port, args.allow_query, out)
         print(f"built {args.db}: {graph.count('Unit')} units, {graph.count('Symbol')} symbols, "
               f"{graph.count('Ast')} syntax nodes", file=out)
+    return 0
+
+
+def serve(graph: Graph, source: Source, port: int, allow_query: bool, out, routes: dict | None = None) -> int:
+    """Serve the explorer until Ctrl-C. adrgraph calls this with its overlay routes."""
+    srv = make_server(graph, source, port, routes, allow_query)
+    print(f"explorer at http://127.0.0.1:{srv.server_address[1]}/  (Ctrl-C to stop)", file=out, flush=True)
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        srv.server_close()
     return 0
 
 

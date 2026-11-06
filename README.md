@@ -21,6 +21,7 @@ Python 3.11 or later. Python and Terraform (HCL) are supported.
 ```bash
 srcgraph build                                   # scans . into .srcgraph/graph.lbug
 srcgraph query "MATCH (u:Unit)-[:IMPORTS]->(v:Unit {kind:'external'}) RETURN v.name, count(*) ORDER BY count(*) DESC LIMIT 10"
+srcgraph serve                        # build, then open the explorer at http://127.0.0.1:8765 (--no-build, --port, --allow-query)
 srcgraph query "MATCH (c)-[:INHERITS]->(b) WHERE b.name = 'BaseCommand' RETURN c.qualified"
 srcgraph query "MATCH (a:Ast {norm:'Decorator'}) RETURN a.text, count(*) ORDER BY count(*) DESC"
 srcgraph importers PySide6                       # every unit importing PySide6 or a submodule, with lines
@@ -72,3 +73,9 @@ One module in `srcgraph/extractors/` that turns a tree-sitter tree into `Unit`, 
 ## Licence
 
 MIT.
+
+## Explorer
+
+`srcgraph serve` builds the graph and serves a single-page explorer on localhost: search units and symbols, click a result to put it on the canvas with its neighbours, double-click a node to expand it, filter by edge label, and read the node's properties and source excerpt in the detail panel. "Syntax tree" drops the node's syntax subtree onto the canvas. The page is one HTML file with `d3` from a pinned CDN URL; the server is the standard library's `http.server`.
+
+JSON routes under `/api/` (`search?q=`, `node?id=`, `neighbors?id=&labels=&direction=`, `subtree?id=&depth=`, `source?path=&from=&to=`) back the page and are usable on their own. `POST /api/query` runs raw Cypher and is off unless the server was started with `--allow-query`. A consumer can mount more routes; `adrgraph serve` adds a findings overlay this way.
