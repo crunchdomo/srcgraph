@@ -3,7 +3,7 @@ import tree_sitter_hcl
 from tree_sitter import Language, Node, Parser
 
 from srcgraph.extractors.lines import LineIndex
-from srcgraph.extractors.syntax import ast_id, emit_syntax
+from srcgraph.extractors.syntax import ast_id, emit_syntax, text as _text
 from srcgraph.model import Edge, Extraction, RawRef, Symbol, Unit, symbol_id
 
 LANG = "terraform"
@@ -12,10 +12,6 @@ _PARSER = Parser(Language(tree_sitter_hcl.language()))
 TF_NORM = {"attribute": "Assign", "identifier": "Name", "string_lit": "String", "function_call": "Call",
            "numeric_lit": "Literal", "bool_lit": "Literal", "variable_expr": "Name", "get_attr": "Attribute"}
 _COMPONENTS = {"var": 2, "local": 2, "module": 2, "data": 3}
-
-
-def _text(node: Node) -> str:
-    return node.text.decode("utf-8", "replace")
 
 
 def _label(node: Node) -> str:

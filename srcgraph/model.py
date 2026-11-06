@@ -1,11 +1,8 @@
 """Shared graph vocabulary. Every extractor emits only these types."""
 from dataclasses import dataclass, field
 
-UNIT_KINDS = {"file", "package", "module", "external"}
 SYMBOL_KINDS = {"function", "method", "class", "type", "variable", "resource", "module_call", "unresolved"}
-EDGE_LABELS = {"CONTAINS", "IMPORTS", "CALLS", "REFERENCES", "INHERITS", "DECORATES", "READS", "WRITES", "TYPE_OF", "OVERRIDES"}
-AST_EDGE_LABELS = {"CHILD", "NEXT"}
-LINK_EDGE_LABEL = "DERIVED_FROM"
+EDGE_LABELS = {"CONTAINS", "IMPORTS", "CALLS", "REFERENCES", "INHERITS", "DECORATES"}
 
 # Normalised syntax kinds: one vocabulary across grammars. Owned here; extractors only map onto it.
 NORM_KINDS = ("ClassDef", "FunctionDef", "Call", "Assign", "Import", "Decorator", "Attribute", "Name", "String",
@@ -96,6 +93,7 @@ class Extraction:
     refs: list[RawRef] = field(default_factory=list)
     ast: list[AstNode] = field(default_factory=list)
     ast_edges: list[Edge] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
 
 def symbol_id(path: str, qualified: str) -> str:

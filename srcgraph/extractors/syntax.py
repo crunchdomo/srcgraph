@@ -6,6 +6,10 @@ from srcgraph.extractors.lines import LineIndex
 from srcgraph.model import TEXT_LIMIT, TEXT_NORMS, AstNode, Edge
 
 
+def text(node: Node) -> str:
+    return node.text.decode("utf-8", "replace")
+
+
 def ast_id(path: str, node: Node) -> str:
     return f"{path}#{node.start_byte}:{node.end_byte}:{node.type}"
 

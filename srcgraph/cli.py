@@ -36,11 +36,8 @@ def _parser() -> argparse.ArgumentParser:
 
 def _run(args, out, err) -> int:
     if args.command == "query":
-        graph = Graph.open(args.db)
-        try:
+        with Graph.open(args.db) as graph:
             rows = graph.query(args.cypher)
-        finally:
-            graph.close()
         if args.format == "json":
             print(json.dumps(rows, indent=2, default=str), file=out)
         elif rows:
@@ -50,13 +47,11 @@ def _run(args, out, err) -> int:
                 print("\t".join(str(r[c]) for c in cols), file=out)
         return 0
     graph, warnings = build(args.src or ["."], DEFAULT_EXCLUDES + tuple(args.exclude), args.db)
-    try:
+    with graph:
         for w in warnings:
             print(f"warning: {w}", file=err)
         print(f"built {args.db}: {graph.count('Unit')} units, {graph.count('Symbol')} symbols, "
               f"{graph.count('Ast')} syntax nodes", file=out)
-    finally:
-        graph.close()
     return 0
 
 

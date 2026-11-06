@@ -3,23 +3,11 @@ import os
 import posixpath
 import re
 import sys
-from dataclasses import dataclass, field
-
 from srcgraph.extractors import EXTRACTORS
-from srcgraph.model import REF_RELATIONS, AstNode, Edge, Extraction, RawImport, Symbol, Unit, unresolved_id
+from srcgraph.model import REF_RELATIONS, Edge, Extraction, RawImport, Symbol, Unit, unresolved_id
 from srcgraph.selectors import glob_to_regex
 
 DEFAULT_EXCLUDES = (".git", ".venv", "venv", "node_modules", ".terraform", ".adrgraph", ".srcgraph", "__pycache__")
-
-
-@dataclass
-class ScanResult:
-    units: list[Unit] = field(default_factory=list)
-    symbols: list[Symbol] = field(default_factory=list)
-    edges: list[Edge] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
-    ast: list[AstNode] = field(default_factory=list)
-    ast_edges: list[Edge] = field(default_factory=list)
 
 
 def module_name(root: str, rel_to_root: str) -> str:
@@ -67,7 +55,7 @@ def _absolute(imp: RawImport, importer: Unit) -> str:
     return f"{base}.{imp.module}" if imp.module and base else (imp.module or base)
 
 
-def _hint(res: ScanResult, index: dict[str, list[str]], name: str) -> None:
+def _hint(res: Extraction, index: dict[str, list[str]], name: str) -> None:
     """Warn when an import went external but a scanned module has that name under a deeper prefix (src layout)."""
     if name.split(".")[0] in sys.stdlib_module_names:
         return  # a scanned module shadowing a stdlib name is not a misconfigured root
@@ -81,8 +69,8 @@ def _hint(res: ScanResult, index: dict[str, list[str]], name: str) -> None:
             return
 
 
-def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> ScanResult:
-    res = ScanResult()
+def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extraction:
+    res = Extraction()
     extractions: list[Extraction] = []
     index: dict[str, list[str]] = {}
     for root, rel in _walk(roots, excludes):

@@ -9,8 +9,7 @@ from collections import defaultdict
 
 import ladybug
 
-from srcgraph.model import Edge
-from srcgraph.scan import ScanResult
+from srcgraph.model import Edge, Extraction
 
 NODE_TABLES = {
     "Unit": "id STRING, path STRING, name STRING, lang STRING, kind STRING, line INT64, PRIMARY KEY(id)",
@@ -28,10 +27,6 @@ REL_TABLES = {
     "REFERENCES": (_REF_PAIRS, ["line"]),
     "INHERITS": ([("Symbol", "Symbol")], ["line"]),
     "DECORATES": ([("Symbol", "Symbol")], ["line"]),
-    "READS": (_REF_PAIRS, ["line"]),
-    "WRITES": (_REF_PAIRS, ["line"]),
-    "TYPE_OF": (_REF_PAIRS, ["line"]),
-    "OVERRIDES": (_REF_PAIRS, ["line"]),
     "DERIVED_FROM": ([("Unit", "Ast"), ("Symbol", "Ast")], []),
     "CHILD": ([("Ast", "Ast")], ["field"]),
     "NEXT": ([("Ast", "Ast")], []),
@@ -140,7 +135,7 @@ class Graph:
         for (label, src, dst), rows in grouped.items():
             self._copy(label, f"{label}_{src}_{dst}.csv", rows, f" (from='{src}', to='{dst}')")
 
-    def load_code(self, result: ScanResult) -> None:
+    def load_code(self, result: Extraction) -> None:
         self.load_nodes("Unit", [{"id": u.id, "path": u.path, "name": u.name, "lang": u.lang, "kind": u.kind, "line": 1} for u in result.units])
         self.load_nodes("Symbol", [vars(s) for s in result.symbols])
         self.load_nodes("Ast", [vars(a) for a in result.ast])

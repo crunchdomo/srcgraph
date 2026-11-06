@@ -5,7 +5,7 @@ import tree_sitter_python
 from tree_sitter import Language, Node, Parser
 
 from srcgraph.extractors.lines import LineIndex
-from srcgraph.extractors.syntax import ast_id, emit_syntax
+from srcgraph.extractors.syntax import ast_id, emit_syntax, text as _text
 from srcgraph.model import Edge, Extraction, RawImport, RawRef, Symbol, Unit, symbol_id
 
 LANG = "python"
@@ -22,10 +22,6 @@ PY_NORM = {
     "keyword_argument": "Argument", "block": "Block", "comment": "Comment", "type": "Type",
     "integer": "Literal", "float": "Literal", "true": "Literal", "false": "Literal", "none": "Literal",
 }
-
-
-def _text(node: Node) -> str:
-    return node.text.decode("utf-8", "replace")
 
 
 def _dotted(node: Node) -> str | None:
