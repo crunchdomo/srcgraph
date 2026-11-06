@@ -10,9 +10,9 @@ It is the engine under [adrgraph](https://github.com/crunchdomo/adrgraph), which
 
 ```bash
 pipx install srcgraph        # or pip install srcgraph in a virtualenv
-# until it is on PyPI:
-pipx install git+https://github.com/crunchdomo/srcgraph@v0.1.0
 ```
+
+Releases are published to PyPI by CI when a `v*` tag is pushed.
 
 Python 3.11 or later. Python and Terraform (HCL) are supported.
 
@@ -21,15 +21,23 @@ Python 3.11 or later. Python and Terraform (HCL) are supported.
 ```bash
 srcgraph build                                   # scans . into .srcgraph/graph.lbug
 srcgraph query "MATCH (u:Unit)-[:IMPORTS]->(v:Unit {kind:'external'}) RETURN v.name, count(*) ORDER BY count(*) DESC LIMIT 10"
+srcgraph serve                        # build, then open the explorer at http://127.0.0.1:8765 (--no-build, --port, --allow-query)
 srcgraph query "MATCH (c)-[:INHERITS]->(b) WHERE b.name = 'BaseCommand' RETURN c.qualified"
 srcgraph query "MATCH (a:Ast {norm:'Decorator'}) RETURN a.text, count(*) ORDER BY count(*) DESC"
+srcgraph importers PySide6                       # every unit importing PySide6 or a submodule, with lines
+srcgraph callers get_tyre_compound_int           # who calls it, by name or qualified name, with lines
+srcgraph scope 'src/gui/**'                      # one compartment: doc line, internal wiring, outbound and inbound wires
 ```
+
+`scope` is the airplane view: pick a compartment by path and see what stays in the room, what the room controls, and what controls it.
+
+The two presets answer the common questions without Cypher; `--format json` works on both and they exit 1 when nothing matches.
 
 `--src` repeats and sets the import roots: with a `src/` layout pass `--src src`. `--exclude` adds names or globs to the defaults (`.git`, `.venv`, `node_modules`, `.terraform`, ...).
 
 ## The graph
 
-**Semantic tier.** `Unit` (file, package, module, or an `external` import such as `logging`) and `Symbol` (function, method, class, variable, Terraform resource, ...). Edges, each carrying the source `line`: `CONTAINS`, `IMPORTS`, `CALLS`, `REFERENCES`, `INHERITS`, `DECORATES`. Unresolved names become `Symbol` nodes of kind `unresolved` so nothing is silently dropped.
+**Semantic tier.** `Unit` (file, package, module, or an `external` import such as `logging`) and `Symbol` (function, method, class, variable, Terraform resource, ...). Both carry `doc`, the first paragraph of their docstring, so "what is this for" is a query, not a file read. A `Unit` has `test` (under a `tests` directory or named `test_*.py`); a `Symbol` has `entry` (reached from a `__main__` guard, a console script in `pyproject.toml`, or a test). Edges, each carrying the source `line`: `CONTAINS`, `IMPORTS`, `CALLS`, `REFERENCES`, `INHERITS`, `DECORATES`. Calls to Python builtins land on one shared `Symbol` of kind `builtin` per name (`builtins.print`), unless the module defines or imports its own. Other unresolved names become `Symbol` nodes of kind `unresolved` so nothing is silently dropped.
 
 **Syntax tier.** Every named tree-sitter node as an `Ast` node with `kind` (the grammar's name, e.g. `class_definition`), `norm` (a shared name where one applies), `line`, `start_byte`, `end_byte`, `field` (its slot in the parent), and `text` for leaves and short high-value nodes. Edges `CHILD` (with `field`) and `NEXT`. Each `Unit` and `Symbol` has a `DERIVED_FROM` edge to the syntax node it came from.
 
@@ -65,3 +73,9 @@ One module in `srcgraph/extractors/` that turns a tree-sitter tree into `Unit`, 
 ## Licence
 
 MIT.
+
+## Explorer
+
+`srcgraph serve` builds the graph and serves a single-page explorer on localhost: search units and symbols, click a result to put it on the canvas with its neighbours, double-click a node to expand it, filter by edge label, and read the node's properties and source excerpt in the detail panel. "Syntax tree" drops the node's syntax subtree onto the canvas. The page is one HTML file with `d3` from a pinned CDN URL; the server is the standard library's `http.server`.
+
+JSON routes under `/api/` (`search?q=`, `node?id=`, `neighbors?id=&labels=&direction=`, `subtree?id=&depth=`, `source?path=&from=&to=`) back the page and are usable on their own. `POST /api/query` runs raw Cypher and is off unless the server was started with `--allow-query`. A consumer can mount more routes; `adrgraph serve` adds a findings overlay this way.

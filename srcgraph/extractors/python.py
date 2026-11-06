@@ -1,12 +1,13 @@
 """Python extractor: tree-sitter AST -> shared vocabulary."""
 import posixpath
+import re
 
 import tree_sitter_python
 from tree_sitter import Language, Node, Parser
 
 from srcgraph.extractors.lines import LineIndex
 from srcgraph.extractors.syntax import ast_id, emit_syntax, text as _text
-from srcgraph.model import Edge, Extraction, RawImport, RawRef, Symbol, Unit, symbol_id
+from srcgraph.model import Edge, Extraction, RawImport, RawRef, Symbol, Unit, is_test_path, symbol_id
 
 LANG = "python"
 _PARSER = Parser(Language(tree_sitter_python.language()))
@@ -33,6 +34,16 @@ def _dotted(node: Node) -> str | None:
         attr = node.child_by_field_name("attribute")
         return f"{head}.{_text(attr)}" if head and attr is not None else None
     return None
+
+
+def _doc(body: Node | None) -> str:
+    """First paragraph of the docstring opening `body` (a module or a block), whitespace collapsed; "" if none."""
+    first = next((c for c in body.named_children if c.type != "comment"), None) if body is not None else None
+    if first is None or first.type != "expression_statement" or not first.named_children or first.named_children[0].type != "string":
+        return ""
+    content = next((c for c in first.named_children[0].children if c.type == "string_content"), None)
+    text = _text(content).strip() if content is not None else ""
+    return " ".join(re.split(r"\n\s*\n", text, maxsplit=1)[0].split())
 
 
 def _imports(node: Node, unit_id: str, lines: LineIndex) -> list[RawImport]:
@@ -73,16 +84,28 @@ def _imports(node: Node, unit_id: str, lines: LineIndex) -> list[RawImport]:
 def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
     ex = Extraction()
     kind = "package" if posixpath.basename(rel_path) == "__init__.py" else "module"
-    ex.units.append(Unit(rel_path, rel_path, module_name, LANG, kind))
     tree = _PARSER.parse(source)
+    ex.units.append(Unit(rel_path, rel_path, module_name, LANG, kind, doc=_doc(tree.root_node), test=is_test_path(rel_path)))
     lines = LineIndex(source)
     ex.ast, ex.ast_edges = emit_syntax(tree.root_node, PY_NORM, rel_path, LANG, lines)
     ex.edges.append(Edge("DERIVED_FROM", rel_path, ast_id(rel_path, tree.root_node)))
+    classes: list[str] = []                       # qualified names of the classes being walked, innermost last
+    self_calls: list[tuple[str, str, int]] = []   # (owner, candidate method qualified, line), checked once all methods are known
+    scopes: list[set[str]] = []                   # parameter and local names of the functions being walked, innermost last
+    in_main = False                               # walking the body of a module-level `if __name__ == "__main__"`
 
-    def symbol(node: Node, qualified: str, kind: str) -> Symbol:
+    def is_local(name: str) -> bool:
+        return bool(scopes) and name.partition(".")[0] in scopes[-1]
+
+    def params(node: Node) -> set[str]:
+        p = node.child_by_field_name("parameters")
+        return {_text(i) for c in (p.named_children if p is not None else [])
+                for i in [next((x for x in c.children if x.type == "identifier"), c)] if i.type == "identifier"}
+
+    def symbol(node: Node, qualified: str, kind: str, doc: str = "") -> Symbol:
         name = qualified.rsplit(".", 1)[-1]
         sym = Symbol(symbol_id(rel_path, qualified), name, qualified, kind, LANG, rel_path,
-                     lines.line(node.start_byte), lines.line(max(node.end_byte - 1, node.start_byte)), node.type)
+                     lines.line(node.start_byte), lines.line(max(node.end_byte - 1, node.start_byte)), node.type, doc)
         ex.edges.append(Edge("DERIVED_FROM", sym.id, ast_id(rel_path, node)))
         return sym
 
@@ -92,8 +115,9 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
         if name_node is None:
             return None
         qualified = f"{scope}.{_text(name_node)}"
+        doc = _doc(node.child_by_field_name("body"))
         if node.type == "class_definition":
-            sym = symbol(node, qualified, "class")
+            sym = symbol(node, qualified, "class", doc)
             bases = node.child_by_field_name("superclasses")
             for base in (bases.children if bases is not None else []):
                 if not base.is_named or base.type in ("keyword_argument", "comment", "list_splat", "dictionary_splat"):
@@ -102,15 +126,19 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
                     base = base.child_by_field_name("value") or base
                 ex.refs.append(RawRef(sym.id, _dotted(base) or _text(base), lines.line(base.start_byte), "inherits"))
         else:
-            sym = symbol(node, qualified, "method" if in_class else "function")
+            sym = symbol(node, qualified, "method" if in_class else "function", doc)
         ex.symbols.append(sym)
         ex.edges.append(Edge("CONTAINS", owner, sym.id))
         body = node.child_by_field_name("body")
         if body is not None:
-            walk(body, qualified, sym.id, node.type == "class_definition", node.type != "class_definition")
+            is_class = node.type == "class_definition"
+            (classes if is_class else scopes).append(qualified if is_class else params(node))
+            walk(body, qualified, sym.id, is_class, not is_class)
+            (classes if is_class else scopes).pop()
         return sym.id
 
     def walk(node: Node, scope: str, owner: str, in_class: bool, in_function: bool) -> None:
+        nonlocal in_main
         for child in node.children:
             t = child.type
             if t in ("import_statement", "import_from_statement", "future_import_statement"):
@@ -142,16 +170,33 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
                 walk(child, scope, owner, in_class, in_function)
             elif t == "call":
                 name = _dotted(child.child_by_field_name("function"))
-                if name:
-                    ex.refs.append(RawRef(owner, name, lines.line(child.start_byte), "calls"))
+                head, _, method = name.partition(".") if name else ("", "", "")
+                if head in ("self", "cls"):
+                    # self.m() resolves to the enclosing class's own m; self.attr.m() needs the attribute's type, so it is dropped
+                    if classes and method and "." not in method:
+                        self_calls.append((owner, f"{classes[-1]}.{method}", lines.line(child.start_byte)))
+                    args = child.child_by_field_name("arguments")
+                    if args is not None:
+                        walk(args, scope, owner, in_class, in_function)
+                elif name and not is_local(name):
+                    ex.refs.append(RawRef(owner, name, lines.line(child.start_byte), "calls", entry=in_main))
                     args = child.child_by_field_name("arguments")
                     if args is not None:
                         walk(args, scope, owner, in_class, in_function)
                 else:
                     walk(child, scope, owner, in_class, in_function)
+            elif t == "if_statement" and not in_class and not in_function and b"__main__" in child.child_by_field_name("condition").text:
+                in_main = True
+                walk(child, scope, owner, in_class, in_function)
+                in_main = False
+            elif t in ("assignment", "for_statement", "for_in_clause") and scopes:
+                left = child.child_by_field_name("left")
+                if left is not None and left.type == "identifier":
+                    scopes[-1].add(_text(left))
+                walk(child, scope, owner, in_class, in_function)
             elif t == "attribute":
                 name = _dotted(child)
-                if name and name.split(".", 1)[0] not in ("self", "cls"):
+                if name and name.split(".", 1)[0] not in ("self", "cls") and not is_local(name):
                     ex.refs.append(RawRef(owner, name, lines.line(child.start_byte), "references"))
                 elif not name:
                     walk(child, scope, owner, in_class, in_function)
@@ -159,4 +204,7 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
                 walk(child, scope, owner, in_class, in_function)
 
     walk(tree.root_node, module_name, rel_path, False, False)
+    defined = {s.qualified for s in ex.symbols}
+    ex.edges.extend(Edge("CALLS", owner, symbol_id(rel_path, target), line)
+                    for owner, target, line in self_calls if target in defined)
     return ex

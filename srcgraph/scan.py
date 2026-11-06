@@ -1,12 +1,16 @@
 """Walk source roots, run extractors, and resolve raw imports and references into graph edges."""
+import builtins
 import os
 import posixpath
 import re
 import sys
+import tomllib
+from dataclasses import replace
 from srcgraph.extractors import EXTRACTORS
-from srcgraph.model import REF_RELATIONS, Edge, Extraction, RawImport, Symbol, Unit, unresolved_id
+from srcgraph.model import REF_RELATIONS, Edge, Extraction, RawImport, Symbol, Unit, symbol_id, unresolved_id
 from srcgraph.selectors import glob_to_regex
 
+BUILTIN_NAMES = frozenset(dir(builtins))
 DEFAULT_EXCLUDES = (".git", ".venv", "venv", "node_modules", ".terraform", ".adrgraph", ".srcgraph", "__pycache__")
 
 
@@ -114,7 +118,22 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
             symbols[uid] = Symbol(uid, name, name, "unresolved", lang, "", 0, 0, "")
         return uid
 
+    def builtin(name: str, lang: str) -> str:
+        """One shared Symbol per builtin, e.g. builtins::builtins.print, instead of an unresolved name per module."""
+        sid = symbol_id("builtins", f"builtins.{name}")
+        if sid not in symbols:
+            symbols[sid] = Symbol(sid, name, f"builtins.{name}", "builtin", lang, "builtins", 0, 0, "")
+        return sid
+
     aliases: dict[str, dict[str, str]] = {}
+    seen_imports: set[tuple[str, str, int]] = set()
+
+    def import_edge(src: str, dst: str, line: int) -> None:
+        """One IMPORTS edge per (unit, target, line): `from m import a, b` is one wire, not two."""
+        if (src, dst, line) not in seen_imports:
+            seen_imports.add((src, dst, line))
+            res.edges.append(Edge("IMPORTS", src, dst, line=line))
+
     for ex in extractions:
         for imp in ex.imports:
             importer = units[imp.unit_id]
@@ -127,14 +146,14 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
                     if target is None:
                         target = external(module or dotted, importer.lang)
                         _hint(res, index, module or dotted)
-                    res.edges.append(Edge("IMPORTS", imp.unit_id, target, line=imp.line))
+                    import_edge(imp.unit_id, target, imp.line)
                     amap[alias] = dotted
             else:
                 target = unit_for(module)
                 if target is None:
                     target = external(module, importer.lang)
                     _hint(res, index, module)
-                res.edges.append(Edge("IMPORTS", imp.unit_id, target, line=imp.line))
+                import_edge(imp.unit_id, target, imp.line)
                 amap[imp.alias or module.split(".")[0]] = module if imp.alias else module.split(".")[0]
 
     # package -> child CONTAINS by name prefix
@@ -144,6 +163,7 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
                 if other.kind in ("module", "package") and other.name.rpartition(".")[0] == u.name:
                     res.edges.append(Edge("CONTAINS", u.id, other.id))
 
+    entry_ids: set[str] = set()
     for ex in extractions:
         for ref in ex.refs:
             src_unit = units[ref.src_id] if ref.src_id in units else units[symbols[ref.src_id].path]
@@ -153,11 +173,29 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
                 amap = aliases.get(src_unit.id, {})
                 base = amap[head] if head in amap else f"{src_unit.name}.{head}"
                 qualified = f"{base}{dot}{rest}"
+                if head not in amap and head in BUILTIN_NAMES and (lang, "", f"{src_unit.name}.{head}") not in by_qualified:
+                    target = builtin(ref.name, lang)
+                    res.edges.append(Edge(REF_RELATIONS[ref.relation], ref.src_id, target, line=ref.line))
+                    continue
             else:
                 qualified = ref.name
             target = by_qualified.get((lang, scope(lang, src_unit.path), qualified)) or unresolved(qualified, lang)
             res.edges.append(Edge(REF_RELATIONS[ref.relation], ref.src_id, target, line=ref.line))
+            if ref.relation == "calls" and (ref.entry or src_unit.test):
+                entry_ids.add(target)
+    for root in roots:  # console scripts declared in pyproject.toml: "pkg.mod:func"
+        try:
+            with open(os.path.join(root, "pyproject.toml"), "rb") as fh:
+                scripts = tomllib.load(fh).get("project", {}).get("scripts", {})
+        except (OSError, tomllib.TOMLDecodeError):
+            scripts = {}
+        for target in scripts.values():
+            mod, _, func = target.partition(":")
+            sid = by_qualified.get(("python", "", f"{mod}.{func}" if func else mod))
+            if sid:
+                entry_ids.add(sid)
 
     res.units = list(units.values())
-    res.symbols = list(symbols.values())
+    res.symbols = [replace(s, entry=True) if s.id in entry_ids and s.kind not in ("builtin", "unresolved") else s
+                   for s in symbols.values()]
     return res

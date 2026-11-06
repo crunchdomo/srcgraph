@@ -8,7 +8,7 @@ def units():
 
 
 def unit_rows():
-    return [{"id": u.id, "path": u.path, "name": u.name, "lang": u.lang, "kind": u.kind, "line": 1} for u in units()]
+    return [{**vars(u), "line": 1} for u in units()]
 
 
 def test_load_and_query(tmp_path):
@@ -123,3 +123,23 @@ def test_open_then_load_with_extensions(tmp_path):
 def test_unknown_rel_property_is_a_clear_error(tmp_path):
     with pytest.raises(ValueError, match="weight"):
         Graph(str(tmp_path / "g.lbug"), rel_tables={"LIKES": ([("Unit", "Unit")], ["weight"])})
+
+
+def test_doc_is_stored_on_unit_and_symbol(tmp_path):
+    from srcgraph.model import Extraction, Unit, Symbol
+    ex = Extraction(units=[Unit("m.py", "m.py", "m", "python", "module", doc="Module doc.")],
+                    symbols=[Symbol("m.py::m.f", "f", "m.f", "function", "python", "m.py", 1, 2, "function_definition", doc="Func doc.")])
+    g = Graph(str(tmp_path / "g.lbug")); g.load_code(ex)
+    assert g.query("MATCH (u:Unit) RETURN u.doc AS d") == [{"d": "Module doc."}]
+    assert g.query("MATCH (s:Symbol) RETURN s.doc AS d") == [{"d": "Func doc."}]
+    g.close()
+
+
+def test_test_and_entry_flags_are_stored(tmp_path):
+    from srcgraph.model import Extraction, Unit, Symbol
+    ex = Extraction(units=[Unit("tests/t.py", "tests/t.py", "tests.t", "python", "module", test=True)],
+                    symbols=[Symbol("tests/t.py::tests.t.f", "f", "tests.t.f", "function", "python", "tests/t.py", 1, 2, "function_definition", entry=True)])
+    g = Graph(str(tmp_path / "g.lbug")); g.load_code(ex)
+    assert g.query("MATCH (u:Unit) RETURN u.test AS t") == [{"t": True}]
+    assert g.query("MATCH (s:Symbol) RETURN s.entry AS e") == [{"e": True}]
+    g.close()

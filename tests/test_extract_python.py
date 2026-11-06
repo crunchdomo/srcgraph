@@ -7,6 +7,38 @@ def ex(rel):
     return extract(rel, Path("tests/fixtures/pyrepo", rel).read_bytes(), rel[:-3].replace("/", ".").removesuffix(".__init__"))
 
 
+def _src(src: str):
+    return extract("m.py", src.encode(), "m")
+
+
+def test_calls_through_parameters_and_locals_are_dropped():
+    e = _src("def f(entry, *rest, **kw):\n    conn = make()\n    entry.get(1)\n    conn.run()\n    rest.pop()\n"
+             "    for row in rows():\n        row.save()\n")
+    names = {r.name for r in e.refs}
+    assert names == {"make", "rows"}
+    assert not [d for d in e.edges if d.label == "CALLS"]
+
+
+def test_module_level_names_inside_a_function_still_reference():
+    e = _src("import os\nCFG = {}\ndef f(x):\n    os.path.join(x)\n    CFG.get(x)\n")
+    assert {r.name for r in e.refs} == {"os.path.join", "CFG.get"}
+
+
+def test_self_and_cls_calls_resolve_to_the_enclosing_class_method():
+    e = _src("class C:\n    def a(self):\n        self.b()\n        cls_free = 1\n"
+             "    def b(self):\n        pass\n    @classmethod\n    def c(cls):\n        cls.b()\n")
+    calls = {(d.src, d.dst, d.line) for d in e.edges if d.label == "CALLS"}
+    assert ("m.py::m.C.a", "m.py::m.C.b", 3) in calls
+    assert ("m.py::m.C.c", "m.py::m.C.b", 9) in calls
+    assert not any(r.name.startswith(("self.", "cls.")) for r in e.refs)
+
+
+def test_self_calls_to_missing_or_chained_methods_are_dropped():
+    e = _src("class C:\n    def a(self):\n        self.missing()\n        self.engine.start()\n")
+    assert not [d for d in e.edges if d.label == "CALLS"]
+    assert not any(r.name.startswith("self.") for r in e.refs)
+
+
 def test_registry():
     assert EXTRACTORS[".py"] is extract
 
@@ -143,3 +175,25 @@ def test_inherits_skips_keywords_comments_splats_and_unwraps_subscripts():
 def test_future_import_is_recorded():
     e = extract("m.py", b"from __future__ import annotations\nimport os\n", "m")
     assert [(i.module, i.names) for i in e.imports] == [("__future__", (("annotations", "annotations"),)), ("os", ())]
+
+
+def _extract(src: str):
+    from srcgraph.extractors.python import extract
+    return extract("m.py", src.encode(), "m")
+
+
+def test_module_doc_is_first_paragraph():
+    ex = _extract('"""\nHelpers for sector analysis.\n\nLong detail that is\nnot the summary.\n"""\nX = 1\n')
+    assert ex.units[0].doc == "Helpers for sector analysis."
+
+
+def test_symbol_doc_for_function_class_and_none():
+    ex = _extract(
+        "class C:\n    'Single-quoted class doc.'\n    def m(self):\n        r\"\"\"\n        Raw and indented\n        over two lines.\n        \"\"\"\n"
+        "def bare():\n    return 1\n")
+    doc = {s.name: s.doc for s in ex.symbols}
+    assert doc == {"C": "Single-quoted class doc.", "m": "Raw and indented over two lines.", "bare": ""}
+
+
+def test_module_without_docstring_has_empty_doc():
+    assert _extract("x = 1\n").units[0].doc == ""

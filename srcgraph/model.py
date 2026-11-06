@@ -1,7 +1,7 @@
 """Shared graph vocabulary. Every extractor emits only these types."""
 from dataclasses import dataclass, field
 
-SYMBOL_KINDS = {"function", "method", "class", "type", "variable", "resource", "module_call", "unresolved"}
+SYMBOL_KINDS = {"function", "method", "class", "type", "variable", "resource", "module_call", "builtin", "unresolved"}
 EDGE_LABELS = {"CONTAINS", "IMPORTS", "CALLS", "REFERENCES", "INHERITS", "DECORATES"}
 
 # Normalised syntax kinds: one vocabulary across grammars. Owned here; extractors only map onto it.
@@ -19,6 +19,8 @@ class Unit:
     name: str
     lang: str
     kind: str
+    doc: str = ""   # first paragraph of the docstring, or ""
+    test: bool = False   # lives under a tests directory or is named test_*.py / *_test.py
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,8 @@ class Symbol:
     line: int
     end_line: int
     ast_kind: str
+    doc: str = ""
+    entry: bool = False   # reached from a __main__ guard, a declared console script, or a test
 
 
 @dataclass(frozen=True)
@@ -82,6 +86,7 @@ class RawRef:
     name: str
     line: int
     relation: str
+    entry: bool = False   # the call site sits under `if __name__ == "__main__"`
 
 
 @dataclass
@@ -94,6 +99,11 @@ class Extraction:
     ast: list[AstNode] = field(default_factory=list)
     ast_edges: list[Edge] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+
+
+def is_test_path(path: str) -> bool:
+    parts = path.split("/")
+    return any(p in ("test", "tests") for p in parts[:-1]) or parts[-1].startswith("test_") or parts[-1].endswith("_test.py")
 
 
 def symbol_id(path: str, qualified: str) -> str:

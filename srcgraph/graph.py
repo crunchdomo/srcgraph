@@ -12,9 +12,9 @@ import ladybug
 from srcgraph.model import Edge, Extraction
 
 NODE_TABLES = {
-    "Unit": "id STRING, path STRING, name STRING, lang STRING, kind STRING, line INT64, PRIMARY KEY(id)",
+    "Unit": "id STRING, path STRING, name STRING, lang STRING, kind STRING, line INT64, doc STRING, test BOOLEAN, PRIMARY KEY(id)",
     "Symbol": "id STRING, name STRING, qualified STRING, kind STRING, lang STRING, path STRING, "
-              "line INT64, end_line INT64, ast_kind STRING, PRIMARY KEY(id)",
+              "line INT64, end_line INT64, ast_kind STRING, doc STRING, entry BOOLEAN, PRIMARY KEY(id)",
     "Ast": "id STRING, path STRING, kind STRING, norm STRING, lang STRING, line INT64, end_line INT64, "
            "start_byte INT64, end_byte INT64, text STRING, field STRING, PRIMARY KEY(id)",
 }
@@ -77,14 +77,15 @@ class Graph:
 
     @classmethod
     def open(cls, path: str, node_tables: dict[str, str] | None = None,
-             rel_tables: dict[str, tuple[list[tuple[str, str]], list[str]]] | None = None) -> "Graph":
+             rel_tables: dict[str, tuple[list[tuple[str, str]], list[str]]] | None = None,
+             read_only: bool = False) -> "Graph":
         """Open an existing database without rebuilding the schema. Pass the same extensions it was
-        built with to load into them."""
+        built with to load into them. `read_only` is for long-lived readers such as `serve`."""
         if not os.path.exists(path):
             raise RuntimeError(f"{path} does not exist; build the graph first")
         g = cls.__new__(cls)
         g._schema(node_tables, rel_tables)
-        g._db = ladybug.Database(path)
+        g._db = ladybug.Database(path, read_only=read_only)
         g._conn = ladybug.Connection(g._db)
         return g
 
@@ -136,7 +137,7 @@ class Graph:
             self._copy(label, f"{label}_{src}_{dst}.csv", rows, f" (from='{src}', to='{dst}')")
 
     def load_code(self, result: Extraction) -> None:
-        self.load_nodes("Unit", [{"id": u.id, "path": u.path, "name": u.name, "lang": u.lang, "kind": u.kind, "line": 1} for u in result.units])
+        self.load_nodes("Unit", [{**vars(u), "line": 1} for u in result.units])
         self.load_nodes("Symbol", [vars(s) for s in result.symbols])
         self.load_nodes("Ast", [vars(a) for a in result.ast])
         field = {a.id: a.field for a in result.ast}

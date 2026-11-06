@@ -8,3 +8,4 @@ build/
 .superpowers/
 .DS_Store
 .adrgraph/
+.claude/

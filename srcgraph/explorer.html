@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>srcgraph explorer</title>
+<style>
+:root{--bg:#fff;--fg:#222;--muted:#777;--line:#ddd;--panel:#f7f7f7;--accent:#2563eb;--bad:#dc2626;
+      --Unit:#2563eb;--Symbol:#16a34a;--Ast:#9ca3af;--Decision:#7c3aed;--Rule:#d97706}
+@media (prefers-color-scheme: dark){:root{--bg:#111;--fg:#eee;--muted:#999;--line:#333;--panel:#1a1a1a}}
+*{box-sizing:border-box}body{margin:0;font:13px/1.4 system-ui,sans-serif;color:var(--fg);background:var(--bg);height:100vh;display:grid;grid-template-columns:260px 1fr 340px;grid-template-rows:100vh}
+aside{overflow:auto;padding:10px;border-right:1px solid var(--line);background:var(--panel)}
+#detail{border-left:1px solid var(--line);border-right:0}
+input[type=search]{width:100%;padding:6px;border:1px solid var(--line);border-radius:4px;background:var(--bg);color:var(--fg)}
+ul{list-style:none;margin:8px 0;padding:0}li{padding:3px 4px;cursor:pointer;border-radius:3px;word-break:break-all}li:hover{background:var(--line)}
+.lbl{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px}
+svg{width:100%;height:100%;display:block}.node circle{stroke:var(--bg);stroke-width:1.5px;cursor:pointer}.node.bad circle{stroke:var(--bad);stroke-width:3px}
+.node.sel circle{stroke:var(--accent);stroke-width:3px}.node text{font-size:10px;pointer-events:none;fill:var(--fg)}
+.link{stroke:var(--muted);stroke-opacity:.6}.link text{font-size:9px;fill:var(--muted)}
+h3{margin:12px 0 4px;font-size:12px;text-transform:uppercase;color:var(--muted)}table{border-collapse:collapse;width:100%}td{padding:2px 4px;vertical-align:top;word-break:break-all}td:first-child{color:var(--muted);white-space:nowrap}
+pre{background:var(--bg);border:1px solid var(--line);padding:6px;overflow:auto;font-size:11px;margin:4px 0}mark{background:#fde2e2;color:#222}
+button{font:inherit;padding:3px 8px;border:1px solid var(--line);border-radius:4px;background:var(--bg);color:var(--fg);cursor:pointer}
+.sev{font-size:10px;padding:0 5px;border-radius:8px;background:var(--line)}.sev.error{background:#fde2e2;color:#222}.sev.warn{background:#fff3cd;color:#222}
+label.f{display:inline-block;margin:0 6px 4px 0;font-size:11px}
+@media (max-width:900px){body{grid-template-columns:1fr;grid-template-rows:auto 60vh auto;height:auto}aside{border:0;border-bottom:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<aside>
+  <input type="search" id="q" placeholder="search units and symbols" autofocus>
+  <ul id="results"></ul>
+  <h3>edges</h3><div id="filters"></div>
+  <div id="overlay" hidden><h3>findings</h3><ul id="findings"></ul></div>
+</aside>
+<main><svg id="canvas"></svg></main>
+<aside id="detail"><p style="color:var(--muted)">Search, then click a result. Double-click a node to expand it.</p></aside>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script>
+const api = async (path) => { const r = await fetch(path); if (!r.ok) throw new Error((await r.json()).error || r.status); return r.json(); };
+const colour = l => getComputedStyle(document.documentElement).getPropertyValue('--' + l).trim() || '#888';
+const nodes = new Map(), links = new Map(), hidden = new Set(), bad = new Map();  // bad: node id -> findings
+let selected = null, findings = [];
+
+// ---- canvas
+const svg = d3.select('#canvas'), g = svg.append('g');
+svg.call(d3.zoom().on('zoom', e => g.attr('transform', e.transform)));
+const linkG = g.append('g'), nodeG = g.append('g');
+const sim = d3.forceSimulation().force('link', d3.forceLink().id(d => d.id).distance(80)).force('charge', d3.forceManyBody().strength(-250))
+  .force('center', d3.forceCenter(400, 300)).on('tick', () => {
+    linkG.selectAll('line').attr('x1', d => d.source.x).attr('y1', d => d.source.y).attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+    linkG.selectAll('text').attr('x', d => (d.source.x + d.target.x) / 2).attr('y', d => (d.source.y + d.target.y) / 2);
+    nodeG.selectAll('g.node').attr('transform', d => `translate(${d.x},${d.y})`);
+  });
+function merge(hood) {
+  for (const n of hood.nodes) if (!nodes.has(n.id)) nodes.set(n.id, {...n});
+  for (const e of hood.edges) links.set(`${e.src}|${e.label}|${e.dst}`, {...e, source: e.src, target: e.dst});
+  for (const e of hood.edges) addFilter(e.label);
+  draw();
+}
+function draw() {
+  const ns = [...nodes.values()], ls = [...links.values()].filter(l => !hidden.has(l.label));
+  const link = linkG.selectAll('g.link').data(ls, l => `${l.src}|${l.label}|${l.dst}`);
+  const le = link.enter().append('g').attr('class', 'link'); le.append('line'); le.append('text').text(d => d.label);
+  link.exit().remove();
+  const node = nodeG.selectAll('g.node').data(ns, d => d.id);
+  const ne = node.enter().append('g').attr('class', 'node').call(d3.drag().on('start', (e, d) => { if (!e.active) sim.alphaTarget(.3).restart(); d.fx = d.x; d.fy = d.y; })
+    .on('drag', (e, d) => { d.fx = e.x; d.fy = e.y; }).on('end', (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = d.fy = null; }));
+  ne.append('circle').attr('r', d => d.label === 'Ast' ? 4 : 7).attr('fill', d => colour(d.label));
+  ne.append('text').attr('dx', 9).attr('dy', 3).text(d => d.name || d.kind || d.id);
+  ne.on('click', (e, d) => select(d.id)).on('dblclick', (e, d) => { e.stopPropagation(); expand(d.id); });
+  node.exit().remove();
+  nodeG.selectAll('g.node').classed('bad', d => bad.has(d.id)).classed('sel', d => d.id === selected);
+  sim.nodes(ns); sim.force('link').links(ls); sim.alpha(.6).restart();
+}
+function addFilter(label) {
+  if (document.querySelector(`#filters input[value="${label}"]`)) return;
+  const l = document.createElement('label'); l.className = 'f';
+  l.innerHTML = `<input type="checkbox" value="${label}" checked> ${label}`;
+  l.querySelector('input').onchange = e => { e.target.checked ? hidden.delete(label) : hidden.add(label); draw(); };
+  document.getElementById('filters').appendChild(l);
+}
+async function expand(id) { merge(await api(`/api/neighbors?id=${encodeURIComponent(id)}`)); }
+async function select(id) {
+  selected = id;
+  if (!nodes.has(id)) await expand(id); else draw();
+  detail(nodes.get(id) || await api(`/api/node?id=${encodeURIComponent(id)}`));
+}
+
+// ---- detail panel
+const esc = s => String(s).replace(/[&<>]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;'}[c]));
+async function detail(n) {
+  const el = document.getElementById('detail');
+  let html = `<h3>${esc(n.label)}</h3><table>` + Object.entries(n).filter(([k, v]) => !['label', 'x', 'y', 'vx', 'vy', 'index', 'fx', 'fy'].includes(k) && v !== null && v !== '')
+    .map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v ?? '')}</td></tr>`).join('') + '</table>';
+  html += `<p><button id="expand">expand</button> <button id="tree">syntax tree</button></p>`;
+  const mine = bad.get(n.id) || [];
+  if (mine.length) {
+    html += '<h3>findings</h3><ul>' + mine.map(f => `<li><span class="sev ${esc(f.severity)}">${esc(f.severity)}</span> ${esc(f.decision)}/${esc(f.rule)}: ${esc(f.message)}</li>`).join('') + '</ul>';
+    const ctx = (mine[0].trail?.steps || []).find(s => s.kind === 'context');
+    if (ctx) html += '<h3>governed by</h3><ul>' + ctx.detail.governed_by.map(g => `<li>${esc(g.decision)} (${esc(g.result)})</li>`).join('') + '</ul>';
+  }
+  el.innerHTML = html;
+  document.getElementById('expand').onclick = () => expand(n.id);
+  document.getElementById('tree').onclick = async () => merge(await api(`/api/subtree?id=${encodeURIComponent(n.id)}&depth=2`));
+  if (n.path && n.line) {
+    const focus = mine.length ? mine[0].line || n.line : n.line;   // a finding's line beats the node's own
+    const from = Math.max(1, focus - 3), to = n.end_line ? Math.min(n.end_line, focus + 12) : focus + 3;
+    try {
+      const src = await api(`/api/source?path=${encodeURIComponent(n.path)}&from=${from}&to=${to}`);
+      const hl = mine.length ? new Set(mine.map(f => f.line)) : new Set([n.line]);
+      el.insertAdjacentHTML('beforeend', `<h3>${esc(n.path)}</h3><pre>` + src.lines.map((l, i) => { const ln = src.from + i, t = `${String(ln).padStart(4)}  ${esc(l)}`; return hl.has(ln) ? `<mark>${t}</mark>` : t; }).join('\n') + '</pre>');
+    } catch (e) { el.insertAdjacentHTML('beforeend', `<p style="color:var(--muted)">source unavailable</p>`); }
+  }
+}
+
+// ---- search
+let timer;
+document.getElementById('q').oninput = e => { clearTimeout(timer); timer = setTimeout(() => search(e.target.value), 150); };
+async function search(q) {
+  const rows = q.trim() ? await api(`/api/search?q=${encodeURIComponent(q)}`) : [];
+  const ul = document.getElementById('results');
+  ul.innerHTML = rows.map(r => `<li data-id="${esc(r.id)}"><span class="lbl" style="background:${colour(r.label)}"></span>${esc(r.qualified || r.name)} <span style="color:var(--muted)">${esc(r.path || '')}</span></li>`).join('');
+  ul.querySelectorAll('li').forEach(li => li.onclick = () => select(li.dataset.id));
+}
+
+// ---- overlay (adrgraph serve): findings list and red nodes
+(async () => {
+  try { findings = await api('/api/findings'); } catch (e) { return; }
+  document.getElementById('overlay').hidden = false;
+  for (const t of findings) { const f = {...t.finding, trail: t}; if (!f.node_id) continue; if (!bad.has(f.node_id)) bad.set(f.node_id, []); bad.get(f.node_id).push(f); }
+  const ul = document.getElementById('findings');
+  ul.innerHTML = findings.filter(t => t.finding.node_id).map(t => { const f = t.finding; return `<li data-id="${esc(f.node_id)}"><span class="sev ${esc(f.severity)}">${esc(f.severity)}</span> ${esc(f.path)}:${f.line}<br><span style="color:var(--muted)">${esc(f.decision)}/${esc(f.rule)}</span></li>`; }).join('');
+  ul.querySelectorAll('li').forEach(li => li.onclick = () => select(li.dataset.id));
+})();
+</script>
+</body>
+</html>

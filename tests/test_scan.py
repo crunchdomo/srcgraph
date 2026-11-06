@@ -124,3 +124,53 @@ def test_inherits_and_decorates_resolved(repo):
 def test_method_decorator_originates_from_method(repo):
     srcs = {d.src for d in repo.edges if d.label == "DECORATES" and d.dst == "unresolved::functools.lru_cache"}
     assert srcs == {"src/views.py::src.views.View.get"}
+
+
+@pytest.fixture
+def builtin_repo(tmp_path, monkeypatch):
+    (tmp_path / "a.py").write_text("def f(x):\n    print(len(x))\n")
+    (tmp_path / "b.py").write_text("print('hi')\n")
+    (tmp_path / "c.py").write_text("def print(*a):\n    pass\n\ndef g():\n    print(1)\n")
+    monkeypatch.chdir(tmp_path)
+    return scan(["."])
+
+
+def test_builtin_calls_share_one_symbol_under_builtins(builtin_repo):
+    calls = {(d.src, d.dst) for d in builtin_repo.edges if d.label == "CALLS"}
+    assert ("a.py::a.f", "builtins::builtins.print") in calls
+    assert ("a.py::a.f", "builtins::builtins.len") in calls
+    assert ("b.py", "builtins::builtins.print") in calls
+    sym = next(s for s in builtin_repo.symbols if s.id == "builtins::builtins.print")
+    assert (sym.kind, sym.name, sym.qualified, sym.path) == ("builtin", "print", "builtins.print", "builtins")
+    assert not any(s.qualified in ("a.print", "b.print", "a.len") for s in builtin_repo.symbols)
+
+
+def test_module_defining_a_builtin_name_resolves_to_its_own(builtin_repo):
+    calls = {(d.src, d.dst) for d in builtin_repo.edges if d.label == "CALLS"}
+    assert ("c.py::c.g", "c.py::c.print") in calls
+    assert ("c.py::c.g", "builtins::builtins.print") not in calls
+
+
+@pytest.fixture
+def entry_repo(tmp_path, monkeypatch):
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "__init__.py").write_text("")
+    (tmp_path / "pkg" / "app.py").write_text(
+        "def main():\n    run()\n\ndef run():\n    pass\n\ndef helper():\n    pass\n\ndef unused():\n    pass\n\n"
+        "if __name__ == '__main__':\n    main()\n")
+    (tmp_path / "pkg" / "cli.py").write_text("def entry():\n    pass\n")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n[project.scripts]\napp = 'pkg.cli:entry'\n")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_app.py").write_text("from pkg.app import helper\n\ndef test_h():\n    helper()\n")
+    monkeypatch.chdir(tmp_path)
+    return scan(["."])
+
+
+def test_units_under_a_tests_directory_are_flagged(entry_repo):
+    flags = {u.id: u.test for u in entry_repo.units if u.kind != "external"}
+    assert flags == {"pkg/__init__.py": False, "pkg/app.py": False, "pkg/cli.py": False, "tests/test_app.py": True}
+
+
+def test_entry_points_from_main_guard_console_script_and_tests(entry_repo):
+    entry = {s.name: s.entry for s in entry_repo.symbols if s.kind in ("function", "method")}
+    assert entry == {"main": True, "entry": True, "helper": True, "run": False, "unused": False, "test_h": False}
