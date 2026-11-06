@@ -13,8 +13,8 @@ REPO = os.path.expanduser(os.environ.get("SRCGRAPH_ACCEPT_REPO", ""))
 pytestmark = pytest.mark.skipif(not REPO, reason="set SRCGRAPH_ACCEPT_REPO=<path> to run")
 
 # Share of CALLS edges landing on unresolved symbols. f1-race-replay on 2026-11-06: 0.951.
-# With #1 and #8: 0.561. Lower it again as #2 (locals) lands.
-UNRESOLVED_CALL_CEILING = 0.6
+# With #1, #2 and #8: 0.377. What remains is mostly calls into external libraries, which is correct.
+UNRESOLVED_CALL_CEILING = 0.4
 
 README_QUERIES = {
     "top external imports": "MATCH (u:Unit)-[:IMPORTS]->(v:Unit {kind:'external'}) RETURN v.name, count(*) ORDER BY count(*) DESC LIMIT 5",
