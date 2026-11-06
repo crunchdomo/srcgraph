@@ -1,12 +1,14 @@
 """Walk source roots, run extractors, and resolve raw imports and references into graph edges."""
+import builtins
 import os
 import posixpath
 import re
 import sys
 from srcgraph.extractors import EXTRACTORS
-from srcgraph.model import REF_RELATIONS, Edge, Extraction, RawImport, Symbol, Unit, unresolved_id
+from srcgraph.model import REF_RELATIONS, Edge, Extraction, RawImport, Symbol, Unit, symbol_id, unresolved_id
 from srcgraph.selectors import glob_to_regex
 
+BUILTIN_NAMES = frozenset(dir(builtins))
 DEFAULT_EXCLUDES = (".git", ".venv", "venv", "node_modules", ".terraform", ".adrgraph", ".srcgraph", "__pycache__")
 
 
@@ -114,6 +116,13 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
             symbols[uid] = Symbol(uid, name, name, "unresolved", lang, "", 0, 0, "")
         return uid
 
+    def builtin(name: str, lang: str) -> str:
+        """One shared Symbol per builtin, e.g. builtins::builtins.print, instead of an unresolved name per module."""
+        sid = symbol_id("builtins", f"builtins.{name}")
+        if sid not in symbols:
+            symbols[sid] = Symbol(sid, name, f"builtins.{name}", "builtin", lang, "builtins", 0, 0, "")
+        return sid
+
     aliases: dict[str, dict[str, str]] = {}
     for ex in extractions:
         for imp in ex.imports:
@@ -153,6 +162,10 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
                 amap = aliases.get(src_unit.id, {})
                 base = amap[head] if head in amap else f"{src_unit.name}.{head}"
                 qualified = f"{base}{dot}{rest}"
+                if head not in amap and head in BUILTIN_NAMES and (lang, "", f"{src_unit.name}.{head}") not in by_qualified:
+                    target = builtin(ref.name, lang)
+                    res.edges.append(Edge(REF_RELATIONS[ref.relation], ref.src_id, target, line=ref.line))
+                    continue
             else:
                 qualified = ref.name
             target = by_qualified.get((lang, scope(lang, src_unit.path), qualified)) or unresolved(qualified, lang)
