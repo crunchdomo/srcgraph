@@ -1,5 +1,6 @@
 """Python extractor: tree-sitter AST -> shared vocabulary."""
 import posixpath
+import re
 
 import tree_sitter_python
 from tree_sitter import Language, Node, Parser
@@ -33,6 +34,16 @@ def _dotted(node: Node) -> str | None:
         attr = node.child_by_field_name("attribute")
         return f"{head}.{_text(attr)}" if head and attr is not None else None
     return None
+
+
+def _doc(body: Node | None) -> str:
+    """First paragraph of the docstring opening `body` (a module or a block), whitespace collapsed; "" if none."""
+    first = next((c for c in body.named_children if c.type != "comment"), None) if body is not None else None
+    if first is None or first.type != "expression_statement" or not first.named_children or first.named_children[0].type != "string":
+        return ""
+    content = next((c for c in first.named_children[0].children if c.type == "string_content"), None)
+    text = _text(content).strip() if content is not None else ""
+    return " ".join(re.split(r"\n\s*\n", text, maxsplit=1)[0].split())
 
 
 def _imports(node: Node, unit_id: str, lines: LineIndex) -> list[RawImport]:
@@ -73,16 +84,16 @@ def _imports(node: Node, unit_id: str, lines: LineIndex) -> list[RawImport]:
 def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
     ex = Extraction()
     kind = "package" if posixpath.basename(rel_path) == "__init__.py" else "module"
-    ex.units.append(Unit(rel_path, rel_path, module_name, LANG, kind))
     tree = _PARSER.parse(source)
+    ex.units.append(Unit(rel_path, rel_path, module_name, LANG, kind, doc=_doc(tree.root_node)))
     lines = LineIndex(source)
     ex.ast, ex.ast_edges = emit_syntax(tree.root_node, PY_NORM, rel_path, LANG, lines)
     ex.edges.append(Edge("DERIVED_FROM", rel_path, ast_id(rel_path, tree.root_node)))
 
-    def symbol(node: Node, qualified: str, kind: str) -> Symbol:
+    def symbol(node: Node, qualified: str, kind: str, doc: str = "") -> Symbol:
         name = qualified.rsplit(".", 1)[-1]
         sym = Symbol(symbol_id(rel_path, qualified), name, qualified, kind, LANG, rel_path,
-                     lines.line(node.start_byte), lines.line(max(node.end_byte - 1, node.start_byte)), node.type)
+                     lines.line(node.start_byte), lines.line(max(node.end_byte - 1, node.start_byte)), node.type, doc)
         ex.edges.append(Edge("DERIVED_FROM", sym.id, ast_id(rel_path, node)))
         return sym
 
@@ -92,8 +103,9 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
         if name_node is None:
             return None
         qualified = f"{scope}.{_text(name_node)}"
+        doc = _doc(node.child_by_field_name("body"))
         if node.type == "class_definition":
-            sym = symbol(node, qualified, "class")
+            sym = symbol(node, qualified, "class", doc)
             bases = node.child_by_field_name("superclasses")
             for base in (bases.children if bases is not None else []):
                 if not base.is_named or base.type in ("keyword_argument", "comment", "list_splat", "dictionary_splat"):
@@ -102,7 +114,7 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
                     base = base.child_by_field_name("value") or base
                 ex.refs.append(RawRef(sym.id, _dotted(base) or _text(base), lines.line(base.start_byte), "inherits"))
         else:
-            sym = symbol(node, qualified, "method" if in_class else "function")
+            sym = symbol(node, qualified, "method" if in_class else "function", doc)
         ex.symbols.append(sym)
         ex.edges.append(Edge("CONTAINS", owner, sym.id))
         body = node.child_by_field_name("body")

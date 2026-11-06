@@ -19,6 +19,7 @@ class Unit:
     name: str
     lang: str
     kind: str
+    doc: str = ""   # first paragraph of the docstring, or ""
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,7 @@ class Symbol:
     line: int
     end_line: int
     ast_kind: str
+    doc: str = ""
 
 
 @dataclass(frozen=True)

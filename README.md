@@ -29,7 +29,7 @@ srcgraph query "MATCH (a:Ast {norm:'Decorator'}) RETURN a.text, count(*) ORDER B
 
 ## The graph
 
-**Semantic tier.** `Unit` (file, package, module, or an `external` import such as `logging`) and `Symbol` (function, method, class, variable, Terraform resource, ...). Edges, each carrying the source `line`: `CONTAINS`, `IMPORTS`, `CALLS`, `REFERENCES`, `INHERITS`, `DECORATES`. Unresolved names become `Symbol` nodes of kind `unresolved` so nothing is silently dropped.
+**Semantic tier.** `Unit` (file, package, module, or an `external` import such as `logging`) and `Symbol` (function, method, class, variable, Terraform resource, ...). Both carry `doc`, the first paragraph of their docstring, so "what is this for" is a query, not a file read. Edges, each carrying the source `line`: `CONTAINS`, `IMPORTS`, `CALLS`, `REFERENCES`, `INHERITS`, `DECORATES`. Unresolved names become `Symbol` nodes of kind `unresolved` so nothing is silently dropped.
 
 **Syntax tier.** Every named tree-sitter node as an `Ast` node with `kind` (the grammar's name, e.g. `class_definition`), `norm` (a shared name where one applies), `line`, `start_byte`, `end_byte`, `field` (its slot in the parent), and `text` for leaves and short high-value nodes. Edges `CHILD` (with `field`) and `NEXT`. Each `Unit` and `Symbol` has a `DERIVED_FROM` edge to the syntax node it came from.
 

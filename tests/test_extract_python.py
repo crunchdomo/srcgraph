@@ -143,3 +143,25 @@ def test_inherits_skips_keywords_comments_splats_and_unwraps_subscripts():
 def test_future_import_is_recorded():
     e = extract("m.py", b"from __future__ import annotations\nimport os\n", "m")
     assert [(i.module, i.names) for i in e.imports] == [("__future__", (("annotations", "annotations"),)), ("os", ())]
+
+
+def _extract(src: str):
+    from srcgraph.extractors.python import extract
+    return extract("m.py", src.encode(), "m")
+
+
+def test_module_doc_is_first_paragraph():
+    ex = _extract('"""\nHelpers for sector analysis.\n\nLong detail that is\nnot the summary.\n"""\nX = 1\n')
+    assert ex.units[0].doc == "Helpers for sector analysis."
+
+
+def test_symbol_doc_for_function_class_and_none():
+    ex = _extract(
+        "class C:\n    'Single-quoted class doc.'\n    def m(self):\n        r\"\"\"\n        Raw and indented\n        over two lines.\n        \"\"\"\n"
+        "def bare():\n    return 1\n")
+    doc = {s.name: s.doc for s in ex.symbols}
+    assert doc == {"C": "Single-quoted class doc.", "m": "Raw and indented over two lines.", "bare": ""}
+
+
+def test_module_without_docstring_has_empty_doc():
+    assert _extract("x = 1\n").units[0].doc == ""

@@ -12,9 +12,9 @@ import ladybug
 from srcgraph.model import Edge, Extraction
 
 NODE_TABLES = {
-    "Unit": "id STRING, path STRING, name STRING, lang STRING, kind STRING, line INT64, PRIMARY KEY(id)",
+    "Unit": "id STRING, path STRING, name STRING, lang STRING, kind STRING, line INT64, doc STRING, PRIMARY KEY(id)",
     "Symbol": "id STRING, name STRING, qualified STRING, kind STRING, lang STRING, path STRING, "
-              "line INT64, end_line INT64, ast_kind STRING, PRIMARY KEY(id)",
+              "line INT64, end_line INT64, ast_kind STRING, doc STRING, PRIMARY KEY(id)",
     "Ast": "id STRING, path STRING, kind STRING, norm STRING, lang STRING, line INT64, end_line INT64, "
            "start_byte INT64, end_byte INT64, text STRING, field STRING, PRIMARY KEY(id)",
 }
@@ -136,7 +136,7 @@ class Graph:
             self._copy(label, f"{label}_{src}_{dst}.csv", rows, f" (from='{src}', to='{dst}')")
 
     def load_code(self, result: Extraction) -> None:
-        self.load_nodes("Unit", [{"id": u.id, "path": u.path, "name": u.name, "lang": u.lang, "kind": u.kind, "line": 1} for u in result.units])
+        self.load_nodes("Unit", [{"id": u.id, "path": u.path, "name": u.name, "lang": u.lang, "kind": u.kind, "line": 1, "doc": u.doc} for u in result.units])
         self.load_nodes("Symbol", [vars(s) for s in result.symbols])
         self.load_nodes("Ast", [vars(a) for a in result.ast])
         field = {a.id: a.field for a in result.ast}
