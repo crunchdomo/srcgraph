@@ -104,3 +104,22 @@ def test_load_code_sets_child_field(tmp_path, monkeypatch):
     assert g.count("Ast") > 100
     assert g.query("MATCH (:Ast {kind:'class_definition'})-[c:CHILD]->(n:Ast {kind:'identifier'}) WHERE c.field = 'name' RETURN n.text AS t ORDER BY t")[0]["t"] == "Base"
     g.close()
+
+
+def test_open_then_load_with_extensions(tmp_path):
+    p = str(tmp_path / "g.lbug")
+    ext_nodes = {"Decision": "id STRING, title STRING, PRIMARY KEY(id)"}
+    ext_rels = {"BINDS": ([("Decision", "Unit")], [])}
+    g = Graph(p, node_tables=ext_nodes, rel_tables=ext_rels)
+    g.load_nodes("Unit", unit_rows()); g.close()
+    g = Graph.open(p, node_tables=ext_nodes, rel_tables=ext_rels)
+    g.load_nodes("Decision", [{"id": "ADR-1", "title": "t"}])
+    g.load_edges([Edge("BINDS", "ADR-1", "src/a.py"), Edge("IMPORTS", "src/a.py", "src/b.py")])
+    assert g.query("MATCH (d:Decision)-[:BINDS]->(u:Unit) RETURN u.id AS u") == [{"u": "src/a.py"}]
+    assert g.query("MATCH ()-[:IMPORTS]->() RETURN count(*) AS c") == [{"c": 1}]
+    g.close()
+
+
+def test_unknown_rel_property_is_a_clear_error(tmp_path):
+    with pytest.raises(ValueError, match="weight"):
+        Graph(str(tmp_path / "g.lbug"), rel_tables={"LIKES": ([("Unit", "Unit")], ["weight"])})

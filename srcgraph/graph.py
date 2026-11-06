@@ -49,18 +49,24 @@ def _columns(ddl: str) -> list[str]:
 
 
 class Graph:
-    def __init__(self, path: str, node_tables: dict[str, str] | None = None,
-                 rel_tables: dict[str, tuple[list[tuple[str, str]], list[str]]] | None = None):
+    def _schema(self, node_tables, rel_tables) -> None:
         for name in (node_tables or {}):
             if name in NODE_TABLES:
                 raise ValueError(f"extension node table '{name}' shadows a srcgraph table")
-        for name in (rel_tables or {}):
+        for name, (_, props) in (rel_tables or {}).items():
             if name in REL_TABLES:
                 raise ValueError(f"extension rel table '{name}' shadows a srcgraph table")
+            for prop in props:
+                if prop not in _PROP_TYPES:
+                    raise ValueError(f"rel table '{name}': unknown property '{prop}' (allowed: {', '.join(sorted(_PROP_TYPES))})")
         self.node_tables = {**NODE_TABLES, **(node_tables or {})}
         self.rel_tables = {**REL_TABLES, **(rel_tables or {})}
         self._cols = {t: _columns(ddl) for t, ddl in self.node_tables.items()}
         self._table_of: dict[str, str] = {}
+
+    def __init__(self, path: str, node_tables: dict[str, str] | None = None,
+                 rel_tables: dict[str, tuple[list[tuple[str, str]], list[str]]] | None = None):
+        self._schema(node_tables, rel_tables)
         for p in (path, path + ".wal"):
             if os.path.exists(p):
                 os.remove(p)
@@ -75,12 +81,14 @@ class Graph:
             self._conn.execute(f"CREATE REL TABLE {label}({spec}{cols})")
 
     @classmethod
-    def open(cls, path: str) -> "Graph":
-        """Open an existing database without rebuilding the schema."""
+    def open(cls, path: str, node_tables: dict[str, str] | None = None,
+             rel_tables: dict[str, tuple[list[tuple[str, str]], list[str]]] | None = None) -> "Graph":
+        """Open an existing database without rebuilding the schema. Pass the same extensions it was
+        built with to load into them."""
         if not os.path.exists(path):
             raise RuntimeError(f"{path} does not exist; build the graph first")
         g = cls.__new__(cls)
-        g.node_tables, g.rel_tables, g._cols, g._table_of = dict(NODE_TABLES), dict(REL_TABLES), {}, {}
+        g._schema(node_tables, rel_tables)
         g._db = ladybug.Database(path)
         g._conn = ladybug.Connection(g._db)
         return g

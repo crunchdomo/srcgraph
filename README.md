@@ -10,6 +10,8 @@ It is the engine under [adrgraph](https://github.com/crunchdomo/adrgraph), which
 
 ```bash
 pipx install srcgraph        # or pip install srcgraph in a virtualenv
+# until it is on PyPI:
+pipx install git+https://github.com/crunchdomo/srcgraph@v0.1.0
 ```
 
 Python 3.11 or later. Python and Terraform (HCL) are supported.
