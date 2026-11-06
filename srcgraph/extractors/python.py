@@ -89,6 +89,8 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
     lines = LineIndex(source)
     ex.ast, ex.ast_edges = emit_syntax(tree.root_node, PY_NORM, rel_path, LANG, lines)
     ex.edges.append(Edge("DERIVED_FROM", rel_path, ast_id(rel_path, tree.root_node)))
+    classes: list[str] = []                       # qualified names of the classes being walked, innermost last
+    self_calls: list[tuple[str, str, int]] = []   # (owner, candidate method qualified, line), checked once all methods are known
 
     def symbol(node: Node, qualified: str, kind: str, doc: str = "") -> Symbol:
         name = qualified.rsplit(".", 1)[-1]
@@ -119,7 +121,12 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
         ex.edges.append(Edge("CONTAINS", owner, sym.id))
         body = node.child_by_field_name("body")
         if body is not None:
-            walk(body, qualified, sym.id, node.type == "class_definition", node.type != "class_definition")
+            is_class = node.type == "class_definition"
+            if is_class:
+                classes.append(qualified)
+            walk(body, qualified, sym.id, is_class, not is_class)
+            if is_class:
+                classes.pop()
         return sym.id
 
     def walk(node: Node, scope: str, owner: str, in_class: bool, in_function: bool) -> None:
@@ -154,7 +161,15 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
                 walk(child, scope, owner, in_class, in_function)
             elif t == "call":
                 name = _dotted(child.child_by_field_name("function"))
-                if name:
+                head, _, method = name.partition(".") if name else ("", "", "")
+                if head in ("self", "cls"):
+                    # self.m() resolves to the enclosing class's own m; self.attr.m() needs the attribute's type, so it is dropped
+                    if classes and method and "." not in method:
+                        self_calls.append((owner, f"{classes[-1]}.{method}", lines.line(child.start_byte)))
+                    args = child.child_by_field_name("arguments")
+                    if args is not None:
+                        walk(args, scope, owner, in_class, in_function)
+                elif name:
                     ex.refs.append(RawRef(owner, name, lines.line(child.start_byte), "calls"))
                     args = child.child_by_field_name("arguments")
                     if args is not None:
@@ -171,4 +186,7 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
                 walk(child, scope, owner, in_class, in_function)
 
     walk(tree.root_node, module_name, rel_path, False, False)
+    defined = {s.qualified for s in ex.symbols}
+    ex.edges.extend(Edge("CALLS", owner, symbol_id(rel_path, target), line)
+                    for owner, target, line in self_calls if target in defined)
     return ex
