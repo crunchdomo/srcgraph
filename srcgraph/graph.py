@@ -77,14 +77,15 @@ class Graph:
 
     @classmethod
     def open(cls, path: str, node_tables: dict[str, str] | None = None,
-             rel_tables: dict[str, tuple[list[tuple[str, str]], list[str]]] | None = None) -> "Graph":
+             rel_tables: dict[str, tuple[list[tuple[str, str]], list[str]]] | None = None,
+             read_only: bool = False) -> "Graph":
         """Open an existing database without rebuilding the schema. Pass the same extensions it was
-        built with to load into them."""
+        built with to load into them. `read_only` is for long-lived readers such as `serve`."""
         if not os.path.exists(path):
             raise RuntimeError(f"{path} does not exist; build the graph first")
         g = cls.__new__(cls)
         g._schema(node_tables, rel_tables)
-        g._db = ladybug.Database(path)
+        g._db = ladybug.Database(path, read_only=read_only)
         g._conn = ladybug.Connection(g._db)
         return g
 

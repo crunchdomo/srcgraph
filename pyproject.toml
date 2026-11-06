@@ -25,6 +25,9 @@ srcgraph = "srcgraph.cli:main"
 [tool.setuptools.packages.find]
 include = ["srcgraph*"]
 
+[tool.setuptools.package-data]
+srcgraph = ["explorer.html"]
+
 [tool.setuptools.dynamic]
 version = { attr = "srcgraph.__version__" }
 
