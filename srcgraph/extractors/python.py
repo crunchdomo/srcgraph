@@ -99,8 +99,8 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
 
     def params(node: Node) -> set[str]:
         p = node.child_by_field_name("parameters")
-        return {_text(i) for c in (p.named_children if p is not None else [])
-                for i in [next((x for x in c.children if x.type == "identifier"), c)] if i.type == "identifier"}
+        ids = [next((x for x in c.children if x.type == "identifier"), c) for c in (p.named_children if p is not None else [])]
+        return {_text(i) for i in ids if i.type == "identifier"}
 
     def symbol(node: Node, qualified: str, kind: str, doc: str = "") -> Symbol:
         name = qualified.rsplit(".", 1)[-1]
@@ -132,9 +132,10 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
         body = node.child_by_field_name("body")
         if body is not None:
             is_class = node.type == "class_definition"
-            (classes if is_class else scopes).append(qualified if is_class else params(node))
+            stack = classes if is_class else scopes
+            stack.append(qualified if is_class else params(node))
             walk(body, qualified, sym.id, is_class, not is_class)
-            (classes if is_class else scopes).pop()
+            stack.pop()
         return sym.id
 
     def walk(node: Node, scope: str, owner: str, in_class: bool, in_function: bool) -> None:
@@ -171,20 +172,18 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
             elif t == "call":
                 name = _dotted(child.child_by_field_name("function"))
                 head, _, method = name.partition(".") if name else ("", "", "")
+                args = child.child_by_field_name("arguments")
                 if head in ("self", "cls"):
                     # self.m() resolves to the enclosing class's own m; self.attr.m() needs the attribute's type, so it is dropped
                     if classes and method and "." not in method:
                         self_calls.append((owner, f"{classes[-1]}.{method}", lines.line(child.start_byte)))
-                    args = child.child_by_field_name("arguments")
-                    if args is not None:
-                        walk(args, scope, owner, in_class, in_function)
                 elif name and not is_local(name):
                     ex.refs.append(RawRef(owner, name, lines.line(child.start_byte), "calls", entry=in_main))
-                    args = child.child_by_field_name("arguments")
-                    if args is not None:
-                        walk(args, scope, owner, in_class, in_function)
                 else:
                     walk(child, scope, owner, in_class, in_function)
+                    continue
+                if args is not None:
+                    walk(args, scope, owner, in_class, in_function)
             elif t == "if_statement" and not in_class and not in_function and b"__main__" in child.child_by_field_name("condition").text:
                 in_main = True
                 walk(child, scope, owner, in_class, in_function)

@@ -40,29 +40,23 @@ def _parser() -> argparse.ArgumentParser:
         sp.add_argument("--exclude", action="append", default=[], help="extra exclude name or glob (repeatable)")
         sp.add_argument("--db", default=DB, help=f"graph database file (default {DB})")
 
+    def ro(sp, positional, help_=None):
+        sp.add_argument("--db", default=DB)
+        sp.add_argument("--format", choices=["text", "json"], default="text")
+        sp.add_argument(positional, help=help_)
+
     common(sub.add_parser("build", help="build the graph database"))
     s = sub.add_parser("serve", help="build, then open the explorer in the browser")
     common(s)
     s.add_argument("--port", type=int, default=8765)
     s.add_argument("--no-build", action="store_true", help="serve the existing database")
     s.add_argument("--allow-query", action="store_true", help="enable POST /api/query (raw Cypher)")
-    q = sub.add_parser("query", help="run Cypher against the last built graph")
-    q.add_argument("--db", default=DB)
-    q.add_argument("--format", choices=["text", "json"], default="text")
-    q.add_argument("cypher")
+    ro(sub.add_parser("query", help="run Cypher against the last built graph"), "cypher")
     for name, (help_, _, _) in PRESETS.items():
-        s = sub.add_parser(name, help=help_)
-        s.add_argument("--db", default=DB)
-        s.add_argument("--format", choices=["text", "json"], default="text")
-        s.add_argument("name")
-    sc = sub.add_parser("scope", help="one compartment: its doc line, internal wiring, outbound and inbound wires")
-    sc.add_argument("--db", default=DB)
-    sc.add_argument("--format", choices=["text", "json"], default="text")
-    sc.add_argument("glob", help="path glob for the compartment, e.g. 'src/gui/**'")
+        ro(sub.add_parser(name, help=help_), "name")
+    ro(sub.add_parser("scope", help="one compartment: its doc line, internal wiring, outbound and inbound wires"),
+       "glob", "path glob for the compartment, e.g. 'src/gui/**'")
     return p
-
-
-SCOPE_EDGES = "CALLS|REFERENCES|INHERITS|IMPORTS"
 
 
 def scope(graph: Graph, glob: str) -> tuple[int, dict[str, list[dict]]]:
@@ -74,7 +68,7 @@ def scope(graph: Graph, glob: str) -> tuple[int, dict[str, list[dict]]]:
 
     def edges(where: str) -> list[dict]:
         # unresolved and builtin targets are not wires that land anywhere worth drawing
-        return graph.query(f"MATCH (a)-[r:{SCOPE_EDGES}]->(b) WHERE {where} AND NOT b.kind IN ['unresolved', 'builtin'] "
+        return graph.query(f"MATCH (a)-[r:CALLS|REFERENCES|INHERITS|IMPORTS]->(b) WHERE {where} AND NOT b.kind IN ['unresolved', 'builtin'] "
                            f"RETURN coalesce(a.qualified, a.path) AS source, label(r) AS label, "
                            f"coalesce(b.qualified, b.name) AS target, r.line AS line ORDER BY source, line, target", params)
     return matched, {
@@ -85,7 +79,7 @@ def scope(graph: Graph, glob: str) -> tuple[int, dict[str, list[dict]]]:
     }
 
 
-def _print(rows: list[dict], fmt: str, out) -> None:
+def _print(rows, fmt: str, out) -> int:
     if fmt == "json":
         print(json.dumps(rows, indent=2, default=str), file=out)
     elif rows:
@@ -93,6 +87,7 @@ def _print(rows: list[dict], fmt: str, out) -> None:
         print("\t".join(cols), file=out)
         for r in rows:
             print("\t".join(str(r[c]) for c in cols), file=out)
+    return 0
 
 
 def _run(args, out, err) -> int:
@@ -108,8 +103,7 @@ def _run(args, out, err) -> int:
             print(f"nothing matches {args.glob}", file=err)
             return 1
         if args.format == "json":
-            print(json.dumps(sections, indent=2, default=str), file=out)
-            return 0
+            return _print(sections, "json", out)
         for d in sections["doc"]:
             print(f"{d['path']}\t{d['doc']}", file=out)
         for name in ("internal", "outbound", "inbound"):
