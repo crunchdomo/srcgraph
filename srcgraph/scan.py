@@ -126,14 +126,7 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
         return sid
 
     aliases: dict[str, dict[str, str]] = {}
-    seen_imports: set[tuple[str, str, int]] = set()
-
-    def import_edge(src: str, dst: str, line: int) -> None:
-        """One IMPORTS edge per (unit, target, line): `from m import a, b` is one wire, not two."""
-        if (src, dst, line) not in seen_imports:
-            seen_imports.add((src, dst, line))
-            res.edges.append(Edge("IMPORTS", src, dst, line=line))
-
+    imports: set[tuple[str, str, int]] = set()   # (unit, target, line): `from m import a, b` is one wire, not two
     for ex in extractions:
         for imp in ex.imports:
             importer = units[imp.unit_id]
@@ -146,15 +139,17 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
                     if target is None:
                         target = external(module or dotted, importer.lang)
                         _hint(res, index, module or dotted)
-                    import_edge(imp.unit_id, target, imp.line)
+                    imports.add((imp.unit_id, target, imp.line))
                     amap[alias] = dotted
             else:
                 target = unit_for(module)
                 if target is None:
                     target = external(module, importer.lang)
                     _hint(res, index, module)
-                import_edge(imp.unit_id, target, imp.line)
+                imports.add((imp.unit_id, target, imp.line))
                 amap[imp.alias or module.split(".")[0]] = module if imp.alias else module.split(".")[0]
+
+    res.edges.extend(Edge("IMPORTS", s, d, line=l) for s, d, l in sorted(imports))
 
     # package -> child CONTAINS by name prefix
     for u in list(units.values()):
