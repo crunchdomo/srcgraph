@@ -23,7 +23,11 @@ srcgraph build                                   # scans . into .srcgraph/graph.
 srcgraph query "MATCH (u:Unit)-[:IMPORTS]->(v:Unit {kind:'external'}) RETURN v.name, count(*) ORDER BY count(*) DESC LIMIT 10"
 srcgraph query "MATCH (c)-[:INHERITS]->(b) WHERE b.name = 'BaseCommand' RETURN c.qualified"
 srcgraph query "MATCH (a:Ast {norm:'Decorator'}) RETURN a.text, count(*) ORDER BY count(*) DESC"
+srcgraph importers PySide6                       # every unit importing PySide6 or a submodule, with lines
+srcgraph callers get_tyre_compound_int           # who calls it, by name or qualified name, with lines
 ```
+
+The two presets answer the common questions without Cypher; `--format json` works on both and they exit 1 when nothing matches.
 
 `--src` repeats and sets the import roots: with a `src/` layout pass `--src src`. `--exclude` adds names or globs to the defaults (`.git`, `.venv`, `node_modules`, `.terraform`, ...).
 

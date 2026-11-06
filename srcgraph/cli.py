@@ -1,4 +1,4 @@
-"""srcgraph command line: build, query."""
+"""srcgraph command line: build, query, and the presets importers and callers."""
 import argparse
 import json
 import sys
@@ -9,6 +9,15 @@ from srcgraph.scan import DEFAULT_EXCLUDES, scan
 from srcgraph.selectors import SelectorError
 
 DB = ".srcgraph/graph.lbug"
+# Presets: the common questions without Cypher. name -> (help, empty message, cypher over $name and $prefix)
+PRESETS = {
+    "importers": ("units that import a module or any of its submodules", "no importers of {}",
+                  "MATCH (u:Unit)-[i:IMPORTS]->(v:Unit) WHERE v.name = $name OR v.name STARTS WITH $prefix "
+                  "RETURN u.path AS importer, i.line AS line, v.name AS module ORDER BY importer, line"),
+    "callers": ("symbols and units that call a symbol, by name or qualified name", "no callers of {}",
+                "MATCH (c)-[r:CALLS]->(s:Symbol) WHERE s.name = $name OR s.qualified = $name "
+                "RETURN coalesce(c.qualified, c.path) AS caller, r.line AS line, s.qualified AS target ORDER BY caller, line"),
+}
 
 
 def build(src_roots: list[str], excludes: tuple[str, ...], db_path: str) -> tuple[Graph, list[str]]:
@@ -31,20 +40,38 @@ def _parser() -> argparse.ArgumentParser:
     q.add_argument("--db", default=DB)
     q.add_argument("--format", choices=["text", "json"], default="text")
     q.add_argument("cypher")
+    for name, (help_, _, _) in PRESETS.items():
+        s = sub.add_parser(name, help=help_)
+        s.add_argument("--db", default=DB)
+        s.add_argument("--format", choices=["text", "json"], default="text")
+        s.add_argument("name")
     return p
+
+
+def _print(rows: list[dict], fmt: str, out) -> None:
+    if fmt == "json":
+        print(json.dumps(rows, indent=2, default=str), file=out)
+    elif rows:
+        cols = list(rows[0])
+        print("\t".join(cols), file=out)
+        for r in rows:
+            print("\t".join(str(r[c]) for c in cols), file=out)
 
 
 def _run(args, out, err) -> int:
     if args.command == "query":
         with Graph.open(args.db) as graph:
             rows = graph.query(args.cypher)
-        if args.format == "json":
-            print(json.dumps(rows, indent=2, default=str), file=out)
-        elif rows:
-            cols = list(rows[0])
-            print("\t".join(cols), file=out)
-            for r in rows:
-                print("\t".join(str(r[c]) for c in cols), file=out)
+        _print(rows, args.format, out)
+        return 0
+    if args.command in PRESETS:
+        _, empty, cypher = PRESETS[args.command]
+        with Graph.open(args.db) as graph:
+            rows = graph.query(cypher, {"name": args.name, "prefix": args.name + "."})
+        if not rows:
+            print(empty.format(args.name), file=err)
+            return 1
+        _print(rows, args.format, out)
         return 0
     graph, warnings = build(args.src or ["."], DEFAULT_EXCLUDES + tuple(args.exclude), args.db)
     with graph:
