@@ -25,7 +25,10 @@ srcgraph query "MATCH (c)-[:INHERITS]->(b) WHERE b.name = 'BaseCommand' RETURN c
 srcgraph query "MATCH (a:Ast {norm:'Decorator'}) RETURN a.text, count(*) ORDER BY count(*) DESC"
 srcgraph importers PySide6                       # every unit importing PySide6 or a submodule, with lines
 srcgraph callers get_tyre_compound_int           # who calls it, by name or qualified name, with lines
+srcgraph scope 'src/gui/**'                      # one compartment: doc line, internal wiring, outbound and inbound wires
 ```
+
+`scope` is the airplane view: pick a compartment by path and see what stays in the room, what the room controls, and what controls it.
 
 The two presets answer the common questions without Cypher; `--format json` works on both and they exit 1 when nothing matches.
 
