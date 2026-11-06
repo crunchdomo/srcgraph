@@ -4,6 +4,8 @@ import os
 import posixpath
 import re
 import sys
+import tomllib
+from dataclasses import replace
 from srcgraph.extractors import EXTRACTORS
 from srcgraph.model import REF_RELATIONS, Edge, Extraction, RawImport, Symbol, Unit, symbol_id, unresolved_id
 from srcgraph.selectors import glob_to_regex
@@ -153,6 +155,7 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
                 if other.kind in ("module", "package") and other.name.rpartition(".")[0] == u.name:
                     res.edges.append(Edge("CONTAINS", u.id, other.id))
 
+    entry_ids: set[str] = set()
     for ex in extractions:
         for ref in ex.refs:
             src_unit = units[ref.src_id] if ref.src_id in units else units[symbols[ref.src_id].path]
@@ -170,7 +173,21 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
                 qualified = ref.name
             target = by_qualified.get((lang, scope(lang, src_unit.path), qualified)) or unresolved(qualified, lang)
             res.edges.append(Edge(REF_RELATIONS[ref.relation], ref.src_id, target, line=ref.line))
+            if ref.relation == "calls" and (ref.entry or src_unit.test):
+                entry_ids.add(target)
+    for root in roots:  # console scripts declared in pyproject.toml: "pkg.mod:func"
+        try:
+            with open(os.path.join(root, "pyproject.toml"), "rb") as fh:
+                scripts = tomllib.load(fh).get("project", {}).get("scripts", {})
+        except (OSError, tomllib.TOMLDecodeError):
+            scripts = {}
+        for target in scripts.values():
+            mod, _, func = target.partition(":")
+            sid = by_qualified.get(("python", "", f"{mod}.{func}" if func else mod))
+            if sid:
+                entry_ids.add(sid)
 
     res.units = list(units.values())
-    res.symbols = list(symbols.values())
+    res.symbols = [replace(s, entry=True) if s.id in entry_ids and s.kind not in ("builtin", "unresolved") else s
+                   for s in symbols.values()]
     return res

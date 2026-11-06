@@ -149,3 +149,28 @@ def test_module_defining_a_builtin_name_resolves_to_its_own(builtin_repo):
     calls = {(d.src, d.dst) for d in builtin_repo.edges if d.label == "CALLS"}
     assert ("c.py::c.g", "c.py::c.print") in calls
     assert ("c.py::c.g", "builtins::builtins.print") not in calls
+
+
+@pytest.fixture
+def entry_repo(tmp_path, monkeypatch):
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "__init__.py").write_text("")
+    (tmp_path / "pkg" / "app.py").write_text(
+        "def main():\n    run()\n\ndef run():\n    pass\n\ndef helper():\n    pass\n\ndef unused():\n    pass\n\n"
+        "if __name__ == '__main__':\n    main()\n")
+    (tmp_path / "pkg" / "cli.py").write_text("def entry():\n    pass\n")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n[project.scripts]\napp = 'pkg.cli:entry'\n")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_app.py").write_text("from pkg.app import helper\n\ndef test_h():\n    helper()\n")
+    monkeypatch.chdir(tmp_path)
+    return scan(["."])
+
+
+def test_units_under_a_tests_directory_are_flagged(entry_repo):
+    flags = {u.id: u.test for u in entry_repo.units if u.kind != "external"}
+    assert flags == {"pkg/__init__.py": False, "pkg/app.py": False, "pkg/cli.py": False, "tests/test_app.py": True}
+
+
+def test_entry_points_from_main_guard_console_script_and_tests(entry_repo):
+    entry = {s.name: s.entry for s in entry_repo.symbols if s.kind in ("function", "method")}
+    assert entry == {"main": True, "entry": True, "helper": True, "run": False, "unused": False, "test_h": False}

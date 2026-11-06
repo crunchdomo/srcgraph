@@ -7,7 +7,7 @@ from tree_sitter import Language, Node, Parser
 
 from srcgraph.extractors.lines import LineIndex
 from srcgraph.extractors.syntax import ast_id, emit_syntax, text as _text
-from srcgraph.model import Edge, Extraction, RawImport, RawRef, Symbol, Unit, symbol_id
+from srcgraph.model import Edge, Extraction, RawImport, RawRef, Symbol, Unit, is_test_path, symbol_id
 
 LANG = "python"
 _PARSER = Parser(Language(tree_sitter_python.language()))
@@ -85,13 +85,14 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
     ex = Extraction()
     kind = "package" if posixpath.basename(rel_path) == "__init__.py" else "module"
     tree = _PARSER.parse(source)
-    ex.units.append(Unit(rel_path, rel_path, module_name, LANG, kind, doc=_doc(tree.root_node)))
+    ex.units.append(Unit(rel_path, rel_path, module_name, LANG, kind, doc=_doc(tree.root_node), test=is_test_path(rel_path)))
     lines = LineIndex(source)
     ex.ast, ex.ast_edges = emit_syntax(tree.root_node, PY_NORM, rel_path, LANG, lines)
     ex.edges.append(Edge("DERIVED_FROM", rel_path, ast_id(rel_path, tree.root_node)))
     classes: list[str] = []                       # qualified names of the classes being walked, innermost last
     self_calls: list[tuple[str, str, int]] = []   # (owner, candidate method qualified, line), checked once all methods are known
     scopes: list[set[str]] = []                   # parameter and local names of the functions being walked, innermost last
+    in_main = False                               # walking the body of a module-level `if __name__ == "__main__"`
 
     def is_local(name: str) -> bool:
         return bool(scopes) and name.partition(".")[0] in scopes[-1]
@@ -137,6 +138,7 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
         return sym.id
 
     def walk(node: Node, scope: str, owner: str, in_class: bool, in_function: bool) -> None:
+        nonlocal in_main
         for child in node.children:
             t = child.type
             if t in ("import_statement", "import_from_statement", "future_import_statement"):
@@ -177,12 +179,16 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
                     if args is not None:
                         walk(args, scope, owner, in_class, in_function)
                 elif name and not is_local(name):
-                    ex.refs.append(RawRef(owner, name, lines.line(child.start_byte), "calls"))
+                    ex.refs.append(RawRef(owner, name, lines.line(child.start_byte), "calls", entry=in_main))
                     args = child.child_by_field_name("arguments")
                     if args is not None:
                         walk(args, scope, owner, in_class, in_function)
                 else:
                     walk(child, scope, owner, in_class, in_function)
+            elif t == "if_statement" and not in_class and not in_function and b"__main__" in child.child_by_field_name("condition").text:
+                in_main = True
+                walk(child, scope, owner, in_class, in_function)
+                in_main = False
             elif t in ("assignment", "for_statement", "for_in_clause") and scopes:
                 left = child.child_by_field_name("left")
                 if left is not None and left.type == "identifier":
