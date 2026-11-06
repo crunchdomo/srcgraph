@@ -7,6 +7,25 @@ def ex(rel):
     return extract(rel, Path("tests/fixtures/pyrepo", rel).read_bytes(), rel[:-3].replace("/", ".").removesuffix(".__init__"))
 
 
+def _src(src: str):
+    return extract("m.py", src.encode(), "m")
+
+
+def test_self_and_cls_calls_resolve_to_the_enclosing_class_method():
+    e = _src("class C:\n    def a(self):\n        self.b()\n        cls_free = 1\n"
+             "    def b(self):\n        pass\n    @classmethod\n    def c(cls):\n        cls.b()\n")
+    calls = {(d.src, d.dst, d.line) for d in e.edges if d.label == "CALLS"}
+    assert ("m.py::m.C.a", "m.py::m.C.b", 3) in calls
+    assert ("m.py::m.C.c", "m.py::m.C.b", 9) in calls
+    assert not any(r.name.startswith(("self.", "cls.")) for r in e.refs)
+
+
+def test_self_calls_to_missing_or_chained_methods_are_dropped():
+    e = _src("class C:\n    def a(self):\n        self.missing()\n        self.engine.start()\n")
+    assert not [d for d in e.edges if d.label == "CALLS"]
+    assert not any(r.name.startswith("self.") for r in e.refs)
+
+
 def test_registry():
     assert EXTRACTORS[".py"] is extract
 
