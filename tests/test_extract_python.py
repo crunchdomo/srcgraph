@@ -11,6 +11,19 @@ def _src(src: str):
     return extract("m.py", src.encode(), "m")
 
 
+def test_calls_through_parameters_and_locals_are_dropped():
+    e = _src("def f(entry, *rest, **kw):\n    conn = make()\n    entry.get(1)\n    conn.run()\n    rest.pop()\n"
+             "    for row in rows():\n        row.save()\n")
+    names = {r.name for r in e.refs}
+    assert names == {"make", "rows"}
+    assert not [d for d in e.edges if d.label == "CALLS"]
+
+
+def test_module_level_names_inside_a_function_still_reference():
+    e = _src("import os\nCFG = {}\ndef f(x):\n    os.path.join(x)\n    CFG.get(x)\n")
+    assert {r.name for r in e.refs} == {"os.path.join", "CFG.get"}
+
+
 def test_self_and_cls_calls_resolve_to_the_enclosing_class_method():
     e = _src("class C:\n    def a(self):\n        self.b()\n        cls_free = 1\n"
              "    def b(self):\n        pass\n    @classmethod\n    def c(cls):\n        cls.b()\n")

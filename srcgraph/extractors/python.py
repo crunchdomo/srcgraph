@@ -91,6 +91,15 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
     ex.edges.append(Edge("DERIVED_FROM", rel_path, ast_id(rel_path, tree.root_node)))
     classes: list[str] = []                       # qualified names of the classes being walked, innermost last
     self_calls: list[tuple[str, str, int]] = []   # (owner, candidate method qualified, line), checked once all methods are known
+    scopes: list[set[str]] = []                   # parameter and local names of the functions being walked, innermost last
+
+    def is_local(name: str) -> bool:
+        return bool(scopes) and name.partition(".")[0] in scopes[-1]
+
+    def params(node: Node) -> set[str]:
+        p = node.child_by_field_name("parameters")
+        return {_text(i) for c in (p.named_children if p is not None else [])
+                for i in [next((x for x in c.children if x.type == "identifier"), c)] if i.type == "identifier"}
 
     def symbol(node: Node, qualified: str, kind: str, doc: str = "") -> Symbol:
         name = qualified.rsplit(".", 1)[-1]
@@ -122,11 +131,9 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
         body = node.child_by_field_name("body")
         if body is not None:
             is_class = node.type == "class_definition"
-            if is_class:
-                classes.append(qualified)
+            (classes if is_class else scopes).append(qualified if is_class else params(node))
             walk(body, qualified, sym.id, is_class, not is_class)
-            if is_class:
-                classes.pop()
+            (classes if is_class else scopes).pop()
         return sym.id
 
     def walk(node: Node, scope: str, owner: str, in_class: bool, in_function: bool) -> None:
@@ -169,16 +176,21 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
                     args = child.child_by_field_name("arguments")
                     if args is not None:
                         walk(args, scope, owner, in_class, in_function)
-                elif name:
+                elif name and not is_local(name):
                     ex.refs.append(RawRef(owner, name, lines.line(child.start_byte), "calls"))
                     args = child.child_by_field_name("arguments")
                     if args is not None:
                         walk(args, scope, owner, in_class, in_function)
                 else:
                     walk(child, scope, owner, in_class, in_function)
+            elif t in ("assignment", "for_statement", "for_in_clause") and scopes:
+                left = child.child_by_field_name("left")
+                if left is not None and left.type == "identifier":
+                    scopes[-1].add(_text(left))
+                walk(child, scope, owner, in_class, in_function)
             elif t == "attribute":
                 name = _dotted(child)
-                if name and name.split(".", 1)[0] not in ("self", "cls"):
+                if name and name.split(".", 1)[0] not in ("self", "cls") and not is_local(name):
                     ex.refs.append(RawRef(owner, name, lines.line(child.start_byte), "references"))
                 elif not name:
                     walk(child, scope, owner, in_class, in_function)
