@@ -1,7 +1,7 @@
 """Shared graph vocabulary. Every extractor emits only these types."""
 from dataclasses import dataclass, field
 
-SYMBOL_KINDS = {"function", "method", "class", "type", "variable", "resource", "module_call", "unresolved"}
+SYMBOL_KINDS = {"function", "method", "class", "type", "variable", "resource", "module_call", "builtin", "unresolved"}
 EDGE_LABELS = {"CONTAINS", "IMPORTS", "CALLS", "REFERENCES", "INHERITS", "DECORATES"}
 
 # Normalised syntax kinds: one vocabulary across grammars. Owned here; extractors only map onto it.

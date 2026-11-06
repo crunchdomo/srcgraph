@@ -124,3 +124,28 @@ def test_inherits_and_decorates_resolved(repo):
 def test_method_decorator_originates_from_method(repo):
     srcs = {d.src for d in repo.edges if d.label == "DECORATES" and d.dst == "unresolved::functools.lru_cache"}
     assert srcs == {"src/views.py::src.views.View.get"}
+
+
+@pytest.fixture
+def builtin_repo(tmp_path, monkeypatch):
+    (tmp_path / "a.py").write_text("def f(x):\n    print(len(x))\n")
+    (tmp_path / "b.py").write_text("print('hi')\n")
+    (tmp_path / "c.py").write_text("def print(*a):\n    pass\n\ndef g():\n    print(1)\n")
+    monkeypatch.chdir(tmp_path)
+    return scan(["."])
+
+
+def test_builtin_calls_share_one_symbol_under_builtins(builtin_repo):
+    calls = {(d.src, d.dst) for d in builtin_repo.edges if d.label == "CALLS"}
+    assert ("a.py::a.f", "builtins::builtins.print") in calls
+    assert ("a.py::a.f", "builtins::builtins.len") in calls
+    assert ("b.py", "builtins::builtins.print") in calls
+    sym = next(s for s in builtin_repo.symbols if s.id == "builtins::builtins.print")
+    assert (sym.kind, sym.name, sym.qualified, sym.path) == ("builtin", "print", "builtins.print", "builtins")
+    assert not any(s.qualified in ("a.print", "b.print", "a.len") for s in builtin_repo.symbols)
+
+
+def test_module_defining_a_builtin_name_resolves_to_its_own(builtin_repo):
+    calls = {(d.src, d.dst) for d in builtin_repo.edges if d.label == "CALLS"}
+    assert ("c.py::c.g", "c.py::c.print") in calls
+    assert ("c.py::c.g", "builtins::builtins.print") not in calls
