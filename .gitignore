@@ -1,0 +1,9 @@
+.srcgraph/*.lbug
+.srcgraph/*.wal
+.venv/
+__pycache__/
+*.egg-info/
+dist/
+build/
+.superpowers/
+.DS_Store
