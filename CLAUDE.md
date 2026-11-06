@@ -1,0 +1,29 @@
+# srcgraph
+
+Source code in, a queryable two-tier knowledge graph out. The engine under adrgraph.
+
+## Context for agents
+
+- Consumer: adrgraph at `~/Documents/adr-as-code` (github.com/crunchdomo/adrgraph). It depends on this
+  package (`srcgraph>=0.1,<0.2`) through the schema-extension API in `srcgraph/graph.py` and must never be
+  imported here (ADR-0001, enforced by `adrgraph check` on this repo).
+- Design history lives in adrgraph's repo under `docs/superpowers/specs/` and `docs/superpowers/plans/`:
+  milestone 1 (enforcer), milestone 2 (two-tier graph), milestone 3 (this split + provenance). The next
+  planned piece for this repo is the explorer (`srcgraph serve`), designed in
+  `2026-11-06-srcgraph-split-and-provenance-design.md` under "Decided: the explorer".
+- Dev setup: `python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'`; `pytest`. `~/Documents` is
+  iCloud-synced, which sometimes hides editable `.pth` files; if `import srcgraph` fails outside pytest,
+  `chflags nohidden .venv/lib/python3.*/site-packages/*.pth`.
+- After changing this package, adrgraph's venv needs `pip install ~/Documents/srcgraph` (non-editable)
+  and then `rm -rf ~/Documents/srcgraph/build`.
+- Self-check: `adrgraph check --exclude tests/fixtures` (adrgraph installed as a dev tool).
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues for `crunchdomo/srcgraph` (via the `gh` CLI).
+
+### Domain docs
+
+Single-context: `docs/adr/` at the repo root.
