@@ -90,7 +90,7 @@ async function select(id) {
 const esc = s => String(s).replace(/[&<>]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;'}[c]));
 async function detail(n) {
   const el = document.getElementById('detail');
-  let html = `<h3>${esc(n.label)}</h3><table>` + Object.entries(n).filter(([k]) => k !== 'label' && k !== 'x' && k !== 'y' && k !== 'vx' && k !== 'vy' && k !== 'index' && k !== 'fx' && k !== 'fy')
+  let html = `<h3>${esc(n.label)}</h3><table>` + Object.entries(n).filter(([k, v]) => !['label', 'x', 'y', 'vx', 'vy', 'index', 'fx', 'fy'].includes(k) && v !== null && v !== '')
     .map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v ?? '')}</td></tr>`).join('') + '</table>';
   html += `<p><button id="expand">expand</button> <button id="tree">syntax tree</button></p>`;
   const mine = bad.get(n.id) || [];
@@ -103,7 +103,8 @@ async function detail(n) {
   document.getElementById('expand').onclick = () => expand(n.id);
   document.getElementById('tree').onclick = async () => merge(await api(`/api/subtree?id=${encodeURIComponent(n.id)}&depth=2`));
   if (n.path && n.line) {
-    const from = Math.max(1, n.line - 3), to = n.end_line ? Math.min(n.end_line, n.line + 12) : n.line + 3;
+    const focus = mine.length ? mine[0].line || n.line : n.line;   // a finding's line beats the node's own
+    const from = Math.max(1, focus - 3), to = n.end_line ? Math.min(n.end_line, focus + 12) : focus + 3;
     try {
       const src = await api(`/api/source?path=${encodeURIComponent(n.path)}&from=${from}&to=${to}`);
       const hl = mine.length ? new Set(mine.map(f => f.line)) : new Set([n.line]);
