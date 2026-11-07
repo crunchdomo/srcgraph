@@ -26,7 +26,7 @@ srcgraph query "MATCH (c)-[:INHERITS]->(b) WHERE b.name = 'BaseCommand' RETURN c
 srcgraph query "MATCH (a:Ast {norm:'Decorator'}) RETURN a.text, count(*) ORDER BY count(*) DESC"
 srcgraph importers PySide6                       # every unit importing PySide6 or a submodule, with lines
 srcgraph callers get_tyre_compound_int           # who calls it, by name or qualified name, with lines
-srcgraph scope 'src/gui/**'                      # one compartment: doc line, internal wiring, outbound and inbound wires
+srcgraph scope 'src/gui/**'                      # one compartment: its files, internal wiring, outbound and inbound wires (--no-tests)
 srcgraph dead                                    # symbols nothing reaches and that are not entry points: deletion candidates
 srcgraph hubs                                    # most wires in and out: what you must not break, and what does too much
 srcgraph untested                                # symbols no test reaches through calls
@@ -34,7 +34,7 @@ srcgraph trace 'src.lib.time.parse_time_string("1:23.456")'   # run it and print
 srcgraph trace tests/lib/test_time.py::test_format_time_valid_values   # same, for one pytest test
 ```
 
-`scope` is the airplane view: pick a compartment by path and see what stays in the room, what the room controls, and what controls it.
+`scope` is the airplane view: pick a compartment by path and see what stays in the room, what the room controls, and what controls it. The header lists every file in the compartment with its doc line; a blank doc is an undocumented file. `--no-tests` hides wires that touch a test unit, leaving the real consumers.
 
 The presets answer the common questions without Cypher; `--format json` works on all of them and they exit 1 when nothing matches. `dead`, `hubs` and `untested` are the structure questions: where to look first when tidying a codebase. They name candidates, not verdicts, since `getattr`, registries and plugins are invisible to a static graph. `dead` keeps a method only when nothing anywhere calls `.name` on an instance, because the graph has no types to say which class an instance is.
 
