@@ -196,3 +196,10 @@ def test_gitignored_files_are_skipped_inside_a_git_repo(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     # a.py tracked, c.py untracked but not ignored, build/ ignored by git, venv/ by the default excludes
     assert [u.id for u in scan(["."]).units] == ["a.py", "c.py"]
+
+
+def test_bare_name_references_resolve_or_vanish(repo):
+    e = {(d.label, d.src, d.dst) for d in repo.edges}
+    assert ("REFERENCES", "src/boom.py::src.boom.passer", "src/boom.py::src.boom.by_name") in e   # passed as a value
+    assert ("REFERENCES", "src/views.py::src.views.typed", "src/views.py::src.views.Plain") in e   # annotation
+    assert "unresolved::src.boom.err" not in {s.id for s in repo.symbols}   # an unknown bare name leaves no node

@@ -29,3 +29,17 @@ def use(s):
 
 def twice(x):
     return echo(echo(x))
+def apply(fn, x):
+    return fn(x)
+
+def by_name(x):
+    return x
+
+def passer(x):
+    return apply(by_name, x)
+
+def catcher():
+    try:
+        pass
+    except ValueError as err:
+        return err
