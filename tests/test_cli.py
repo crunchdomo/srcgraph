@@ -93,6 +93,9 @@ def test_dead_lists_unreached_symbols_only(built, capsys):
     assert "src.contracts.c.call" not in names   # called by view
     assert "src.views.Base" not in names   # inherited by View
     assert "src.views.Repr.__repr__" not in names   # dunders are called by the interpreter
+    assert "tests.uses_call.test_call" not in names   # test code is reached by the runner
+    assert "src.boom.Shape.area" not in names   # s.area() somewhere: a method with its name called on an instance
+    assert "src.boom.Shape.never" in names
 
 
 def test_hubs_ranks_by_fan_in_plus_fan_out(built, capsys):
@@ -111,3 +114,4 @@ def test_untested_omits_symbols_reached_from_a_test_unit(built, capsys):
     assert "src.handlers.h.leak" in names
     assert "src.contracts.c.call" not in names   # tests/uses_call.py calls it
     assert not any(n.startswith("tests.") for n in names)   # test code is not itself untested
+    assert "src.contracts.c.Contract.send" in names   # reaching the class does not reach its methods

@@ -16,3 +16,13 @@ def echo(x):
 
 class Grid:
     shape = (3, 4)
+
+class Shape:
+    def area(self):
+        return 12
+
+    def never(self):
+        pass
+
+def use(s):
+    return s.area()

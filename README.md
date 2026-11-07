@@ -35,11 +35,11 @@ srcgraph trace 'src.lib.time.parse_time_string("1:23.456")'   # run it and print
 
 `scope` is the airplane view: pick a compartment by path and see what stays in the room, what the room controls, and what controls it.
 
-The presets answer the common questions without Cypher; `--format json` works on all of them and they exit 1 when nothing matches. `dead`, `hubs` and `untested` are the structure questions: where to look first when tidying a codebase. They name candidates, not verdicts, since `getattr`, registries and plugins are invisible to a static graph.
+The presets answer the common questions without Cypher; `--format json` works on all of them and they exit 1 when nothing matches. `dead`, `hubs` and `untested` are the structure questions: where to look first when tidying a codebase. They name candidates, not verdicts, since `getattr`, registries and plugins are invisible to a static graph. `dead` keeps a method only when nothing anywhere calls `.name` on an instance, because the graph has no types to say which class an instance is.
 
 `trace` is one flight: the static graph is the state machine (functions are states, CALLS edges the transitions) and a trace is one run of it. It runs the expression in the `python` on your PATH, so activate the target repo's venv first and run it where you ran `build`. Only functions in the graph appear; library and stdlib frames are dropped. Each call prints as `qualified(arg=value)`, its return as `= value  (ms)`, and an exception as `! Type: message` at every frame it passes through. Values are cut at 60 characters, containers show as `list[1200]`, anything with a `shape` as `DataFrame(1200×12)`, and a run of three or more calls to the same function collapses to the first, `× N calls (ms)`, and the last. That makes a trace a profiler over your own code only.
 
-`--src` repeats and sets the import roots: with a `src/` layout pass `--src src`. `--exclude` adds names or globs to the defaults (`.git`, `.venv`, `node_modules`, `.terraform`, ...).
+`--src` repeats and sets the import roots: with a `src/` layout pass `--src src`. `--exclude` adds names or globs to the defaults: every hidden directory, `venv`, `node_modules`, `__pycache__`. A pattern without `/` matches one path component at any depth; with `/` it matches from the root.
 
 ## The graph
 
