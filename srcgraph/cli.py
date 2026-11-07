@@ -120,6 +120,53 @@ def trace(graph: Graph, expr: str) -> tuple[int, list[dict]]:
     return proc.returncode, events
 
 
+def render(events: list[dict]) -> list[str]:
+    """Trace events as an indented tree. Runs of 3+ sibling calls to the same function collapse to first, × N, last."""
+    root: dict = {"kids": []}
+    stack = [root]   # stack[d] is the open call at depth d - 1; stack[0] the root
+    for ev in events:
+        d = ev["depth"]
+        del stack[d + 1:]
+        if ev["ev"] == "call":
+            node = {**ev, "kids": []}
+            stack[-1]["kids"].append(node)
+            stack.append(node)
+        else:   # return or exc belongs to the call one level up
+            stack[d].update(ev)
+
+    def ms(node) -> float:
+        return node.get("ms", 0.0)
+
+    def line(node, pad) -> list[str]:
+        out = [f"{pad}{node['sym']}({', '.join(f'{k}={v}' for k, v in node['args'].items())})", *lines(node["kids"], pad + "  ")]
+        if "value" in node:
+            out.append(f"{pad}  = {node['value']}  ({ms(node):.1f} ms)")
+        elif "text" in node:
+            out.append(f"{pad}  ! {node['text']}")
+        return out
+
+    def lines(kids, pad) -> list[str]:
+        out, i = [], 0
+        while i < len(kids):
+            j = i
+            while j < len(kids) and kids[j]["sym"] == kids[i]["sym"]:
+                j += 1
+            if j - i >= 3:
+                out += line(kids[i], pad) + [f"{pad}× {j - i} calls  ({sum(map(ms, kids[i:j])):.1f} ms)"] + line(kids[j - 1], pad)
+            else:
+                for k in kids[i:j]:
+                    out += line(k, pad)
+            i = j
+        return out
+
+    out = lines(root["kids"], "")
+    if "value" in root:
+        out.append(f"= {root['value']}  ({ms(root):.1f} ms)")
+    elif "text" in root:
+        out.append(f"! {root['text']}")
+    return out
+
+
 def _print(rows, fmt: str, out) -> int:
     if fmt == "json":
         print(json.dumps(rows, indent=2, default=str), file=out)
@@ -157,14 +204,8 @@ def _run(args, out, err) -> int:
         if args.format == "json":
             _print(events, "json", out)
             return code
-        for ev in events:
-            pad = "  " * ev["depth"]
-            if ev["ev"] == "call":
-                print(f"{pad}{ev['sym']}({', '.join(f'{k}={v}' for k, v in ev['args'].items())})", file=out)
-            elif ev["ev"] == "return":
-                print(f"{pad}= {ev['value']}", file=out)
-            else:
-                print(f"{pad}! {ev['text']}", file=out)
+        for line in render(events):
+            print(line, file=out)
         return code
     if args.command in PRESETS:
         _, empty, cypher = PRESETS[args.command]

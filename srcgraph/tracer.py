@@ -7,15 +7,23 @@ import importlib
 import json
 import os
 import sys
+from time import perf_counter
 
 LIMIT = 60
 
 
 def short(value) -> str:
+    """repr cut at LIMIT; containers as type[len]; anything with a shape as Type(r×c)."""
+    name = type(value).__name__
+    if isinstance(value, (list, tuple, set, frozenset, dict)):
+        return f"{name}[{len(value)}]"
     try:
+        shape = getattr(value, "shape", None)
+        if isinstance(shape, tuple):
+            return f"{name}({'×'.join(map(str, shape))})"
         r = repr(value)
-    except Exception:  # a repr that raises is still a value worth showing
-        r = f"<{type(value).__name__}>"
+    except Exception:  # a repr or property that raises is still a value worth showing
+        r = f"<{name}>"
     return r if len(r) <= LIMIT else r[: LIMIT - 1] + "…"
 
 
@@ -24,6 +32,7 @@ def main(table_path: str, events_path: str, expr: str) -> int:
     events = open(events_path, "w")   # closed in the finally: the traceback cycle can keep it unflushed at exit
     known: dict = {}   # code object -> qualified or None
     raised: set = set()   # ids of frames unwinding with an exception
+    started: dict = {}   # id(frame) -> perf_counter at call
 
     def emit(**ev):
         events.write(json.dumps(ev) + "\n")
@@ -46,8 +55,10 @@ def main(table_path: str, events_path: str, expr: str) -> int:
         if event == "exception":
             raised.add(id(frame))
             emit(ev="exc", depth=depth(frame) + 1, text=f"{arg[0].__name__}: {arg[1]}")
-        elif event == "return" and id(frame) not in raised:
-            emit(ev="return", depth=depth(frame) + 1, value=short(arg))
+        elif event == "return":
+            ms = (perf_counter() - started.pop(id(frame), perf_counter())) * 1000
+            if id(frame) not in raised:
+                emit(ev="return", depth=depth(frame) + 1, value=short(arg), ms=ms)
         # ponytail: a frame that catches an exception and returns normally shows no return line; track exc_info if it matters
         return local
 
@@ -58,6 +69,7 @@ def main(table_path: str, events_path: str, expr: str) -> int:
         code = frame.f_code
         names = code.co_varnames[: code.co_argcount + code.co_kwonlyargcount]
         emit(ev="call", sym=resolve(code), depth=depth(frame), args={n: short(frame.f_locals[n]) for n in names if n in frame.f_locals})
+        started[id(frame)] = perf_counter()
         return local
 
     sys.path.insert(0, os.getcwd())
@@ -70,13 +82,14 @@ def main(table_path: str, events_path: str, expr: str) -> int:
             continue
     ns = {parts[0]: sys.modules[parts[0]]} if parts[0] in sys.modules else {}
     sys.settrace(tracer)
+    t0 = perf_counter()
     try:
         value = eval(expr, ns)
     except Exception as exc:
         emit(ev="exc", depth=0, text=f"{type(exc).__name__}: {exc}")
         return 1
     else:
-        emit(ev="return", depth=0, value=short(value))
+        emit(ev="return", depth=0, value=short(value), ms=(perf_counter() - t0) * 1000)
         return 0
     finally:
         sys.settrace(None)

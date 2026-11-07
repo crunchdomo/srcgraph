@@ -9,8 +9,8 @@ def test_trace_prints_nested_graph_calls_only(built, capsys):
     assert lines[1] == "  src.contracts.c.call(req=1)"
     assert lines[2].startswith("    src.contracts.c.Contract.send(self=<")
     assert lines[3] == "      src.gateway.client.post()"
-    assert lines[4] == "        = None"
-    assert lines[-1] == "= None"
+    assert lines[4].startswith("        = None  (")
+    assert lines[-1].startswith("= None  (")
     assert "logging" not in out
 
 
@@ -20,3 +20,27 @@ def test_trace_marks_exception_and_exits_1(built, capsys):
     assert "src.boom.boom(x=3)" in out and "  src.boom.inner(x=3)" in out
     assert "    ! ValueError: bad 3" in out
     assert out.rstrip().endswith("! ValueError: bad 3")
+
+
+def test_trace_collapses_repeated_calls_and_times_them(built, capsys):
+    import re
+    code, out, _ = run(capsys, "trace", "--db", built, "src.boom.loop(5)")
+    assert code == 0
+    lines = out.splitlines()
+    assert lines[0] == "src.boom.loop(n=5)"
+    assert lines[1] == "  src.boom.inner_ok(i=0)"
+    assert re.fullmatch(r"    = 0  \(\d+\.\d ms\)", lines[2])
+    assert re.fullmatch(r"  × 5 calls  \(\d+\.\d ms\)", lines[3])
+    assert lines[4] == "  src.boom.inner_ok(i=4)"
+    assert re.fullmatch(r"    = 4  \(\d+\.\d ms\)", lines[5])
+    assert re.fullmatch(r"  = None  \(\d+\.\d ms\)", lines[6])
+    assert len(lines) == 8
+
+
+def test_trace_shortens_values(built, capsys):
+    _, out, _ = run(capsys, "trace", "--db", built, "src.boom.echo(list(range(100)))")
+    assert out.splitlines()[0] == "src.boom.echo(x=list[100])"
+    _, out, _ = run(capsys, "trace", "--db", built, "src.boom.echo('a' * 100)")
+    assert out.splitlines()[0] == "src.boom.echo(x='" + "a" * 58 + "…)"
+    _, out, _ = run(capsys, "trace", "--db", built, "src.boom.echo(src.boom.Grid())")
+    assert out.splitlines()[0] == "src.boom.echo(x=Grid(3×4))"
