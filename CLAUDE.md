@@ -5,7 +5,7 @@ Source code in, a queryable two-tier knowledge graph out. The engine under adrgr
 ## Context for agents
 
 - Consumer: adrgraph at `~/Documents/adr-as-code` (github.com/crunchdomo/adrgraph). It depends on this
-  package (`srcgraph>=0.1,<0.2`) through the schema-extension API in `srcgraph/graph.py` and must never be
+  package (`srcgraph>=0.2,<0.3`) through the schema-extension API in `srcgraph/graph.py` and must never be
   imported here (ADR-0001, enforced by `adrgraph check` on this repo).
 - Design history lives in adrgraph's repo under `docs/superpowers/specs/` and `docs/superpowers/plans/`:
   milestone 1 (enforcer), milestone 2 (two-tier graph), milestone 3 (this split + provenance). The next
