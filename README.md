@@ -27,9 +27,12 @@ srcgraph query "MATCH (a:Ast {norm:'Decorator'}) RETURN a.text, count(*) ORDER B
 srcgraph importers PySide6                       # every unit importing PySide6 or a submodule, with lines
 srcgraph callers get_tyre_compound_int           # who calls it, by name or qualified name, with lines
 srcgraph scope 'src/gui/**'                      # one compartment: doc line, internal wiring, outbound and inbound wires
+srcgraph trace 'src.lib.time.parse_time_string("1:23.456")'   # run it and print the calls it makes through the graph
 ```
 
 `scope` is the airplane view: pick a compartment by path and see what stays in the room, what the room controls, and what controls it.
+
+`trace` is one flight: the static graph is the state machine (functions are states, CALLS edges the transitions) and a trace is one run of it. It runs the expression in the `python` on your PATH, so activate the target repo's venv first and run it where you ran `build`. Only functions in the graph appear; library and stdlib frames are dropped. Each call prints as `qualified(arg=value)`, its return as `= value`, and an exception as `! Type: message` at every frame it passes through.
 
 The two presets answer the common questions without Cypher; `--format json` works on both and they exit 1 when nothing matches.
 
