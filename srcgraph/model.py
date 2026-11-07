@@ -44,6 +44,7 @@ class Edge:
     src: str
     dst: str
     line: int = 0
+    guard: str = ""   # CALLS only: nearest enclosing if/for/while/try as kind@line, "" when unconditional
 
 
 @dataclass(frozen=True)
@@ -87,6 +88,7 @@ class RawRef:
     line: int
     relation: str
     entry: bool = False   # the call site sits under `if __name__ == "__main__"`
+    guard: str = ""   # nearest enclosing if/for/while/try as kind@line, "" when unconditional
 
 
 @dataclass

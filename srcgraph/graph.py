@@ -23,7 +23,7 @@ _REF_PAIRS = [("Symbol", "Symbol"), ("Symbol", "Unit"), ("Unit", "Symbol"), ("Un
 REL_TABLES = {
     "CONTAINS": ([("Unit", "Unit"), ("Unit", "Symbol"), ("Symbol", "Symbol")], ["line"]),
     "IMPORTS": ([("Unit", "Unit")], ["line"]),
-    "CALLS": ([("Symbol", "Symbol"), ("Unit", "Symbol")], ["line"]),
+    "CALLS": ([("Symbol", "Symbol"), ("Unit", "Symbol")], ["line", "guard"]),
     "REFERENCES": (_REF_PAIRS, ["line"]),
     "INHERITS": ([("Symbol", "Symbol")], ["line"]),
     "DECORATES": ([("Symbol", "Symbol")], ["line"]),
@@ -31,7 +31,7 @@ REL_TABLES = {
     "CHILD": ([("Ast", "Ast")], ["field"]),
     "NEXT": ([("Ast", "Ast")], []),
 }
-_PROP_TYPES = {"line": "INT64", "field": "STRING"}
+_PROP_TYPES = {"line": "INT64", "field": "STRING", "guard": "STRING"}
 
 
 def escape(s: str) -> str:
@@ -132,7 +132,8 @@ class Graph:
             pairs, labels = self.rel_tables[e.label]
             if src and dst and (src, dst) in pairs:
                 extra = props.get((e.label, e.src, e.dst), {})
-                grouped[(e.label, src, dst)].append([e.src, e.dst, *[e.line if p == "line" else extra.get(p, "") for p in labels]])
+                own = {"line": e.line, "guard": e.guard}
+                grouped[(e.label, src, dst)].append([e.src, e.dst, *[own[p] if p in own else extra.get(p, "") for p in labels]])
         for (label, src, dst), rows in grouped.items():
             self._copy(label, f"{label}_{src}_{dst}.csv", rows, f" (from='{src}', to='{dst}')")
 
