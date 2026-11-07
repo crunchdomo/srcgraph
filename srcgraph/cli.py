@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from datetime import datetime
 
 from srcgraph import __version__, tracer
 from srcgraph.graph import Graph
@@ -110,18 +111,27 @@ def scope(graph: Graph, glob: str) -> tuple[int, dict[str, list[dict]]]:
     }
 
 
-def trace(graph: Graph, expr: str) -> tuple[int, list[dict]]:
-    """Run expr under srcgraph/tracer.py in the `python` on PATH; returns (exit code, call/return/exc events).
-    Symbol paths are relative to the build's cwd, so run this where you ran build."""
+def traces_dir(db: str) -> str:
+    return os.path.join(os.path.dirname(db) or ".", "traces")
+
+
+def trace(graph: Graph, expr: str, db: str) -> tuple[int, list[dict]]:
+    """Run expr under srcgraph/tracer.py in the `python` on PATH; returns (exit code, call/return/exc events)
+    and saves them under <db dir>/traces/ for the explorer. Symbol paths are relative to the build's cwd, so run
+    this where you ran build."""
     table: dict[str, dict[str, list]] = {}
     for r in graph.query("MATCH (s:Symbol) WHERE s.kind IN ['function', 'method'] "
                          "RETURN s.path AS path, s.name AS name, s.line AS line, s.qualified AS q ORDER BY line"):
-        table.setdefault(os.path.abspath(r["path"]), {}).setdefault(r["name"], []).append([r["line"], r["q"]])
+        table.setdefault(os.path.abspath(r["path"]), {}).setdefault(r["name"], []).append([r["line"], r["q"], f"{r['path']}::{r['q']}"])
     with tempfile.TemporaryDirectory() as d:
         tp, ep = os.path.join(d, "table.json"), os.path.join(d, "events.jsonl")
         json.dump(table, open(tp, "w"))
         proc = subprocess.run([shutil.which("python") or sys.executable, tracer.__file__, tp, ep, expr])
         events = [json.loads(l) for l in open(ep)] if os.path.exists(ep) else []
+    os.makedirs(traces_dir(db), exist_ok=True)
+    now = datetime.now()
+    with open(os.path.join(traces_dir(db), now.strftime("%Y%m%d-%H%M%S-%f") + ".json"), "w") as f:
+        json.dump({"input": expr, "at": now.isoformat(timespec="seconds"), "events": events}, f)
     return proc.returncode, events
 
 
@@ -205,7 +215,7 @@ def _run(args, out, err) -> int:
         return 0
     if args.command == "trace":
         with Graph.open(args.db) as graph:
-            code, events = trace(graph, args.expr)
+            code, events = trace(graph, args.expr, args.db)
         if args.format == "json":
             _print(events, "json", out)
             return code
@@ -230,15 +240,16 @@ def _run(args, out, err) -> int:
         for w in warnings:
             print(f"warning: {w}", file=err)
         if args.command == "serve":
-            return serve(graph, Source((args.src or ["."])[0]), args.port, args.allow_query, out)
+            return serve(graph, Source((args.src or ["."])[0]), args.port, args.allow_query, out, traces=traces_dir(args.db))
         print(f"built {args.db}: {graph.count('Unit')} units, {graph.count('Symbol')} symbols, "
               f"{graph.count('Ast')} syntax nodes", file=out)
     return 0
 
 
-def serve(graph: Graph, source: Source, port: int, allow_query: bool, out, routes: dict | None = None) -> int:
+def serve(graph: Graph, source: Source, port: int, allow_query: bool, out, routes: dict | None = None,
+          traces: str | None = None) -> int:
     """Serve the explorer until Ctrl-C. adrgraph calls this with its overlay routes."""
-    srv = make_server(graph, source, port, routes, allow_query)
+    srv = make_server(graph, source, port, routes, allow_query, traces=traces)
     print(f"explorer at http://127.0.0.1:{srv.server_address[1]}/  (Ctrl-C to stop)", file=out, flush=True)
     try:
         srv.serve_forever()

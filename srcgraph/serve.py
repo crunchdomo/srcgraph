@@ -28,8 +28,8 @@ def _node(d: dict) -> dict:
 
 
 class Explorer:
-    def __init__(self, graph: Graph, source: Source):
-        self.graph, self.source = graph, source
+    def __init__(self, graph: Graph, source: Source, traces: str | None = None):
+        self.graph, self.source, self.traces_dir = graph, source, traces
         self.edge_labels = sorted(set(graph.rel_tables) - SYNTAX_LABELS)
 
     def search(self, p: dict) -> list[dict]:
@@ -95,14 +95,50 @@ class Explorer:
         start, end = max(1, int(p.get("from", 1))), min(len(lines), int(p.get("to", len(lines))))
         return {"path": path, "from": start, "lines": lines[start - 1:end]}
 
+    def _trace_file(self, name: str) -> dict:
+        path = os.path.join(self.traces_dir or "", os.path.basename(name))
+        if not self.traces_dir or not os.path.isfile(path):
+            raise NotFound(name)
+        with open(path) as f:
+            return json.load(f)
+
+    def traces(self, p: dict) -> list[dict]:
+        """Saved runs, newest first: what `srcgraph trace` wrote under <db dir>/traces/."""
+        if not self.traces_dir or not os.path.isdir(self.traces_dir):
+            return []
+        out = []
+        for fn in sorted(os.listdir(self.traces_dir), reverse=True):
+            if fn.endswith(".json"):
+                d = self._trace_file(fn)
+                out.append({"file": fn, "input": d.get("input"), "at": d.get("at"),
+                            "calls": sum(e["ev"] == "call" for e in d["events"])})
+        return out
+
+    def trace(self, p: dict) -> dict:
+        """One saved run as a path on the graph: its nodes, RAN edges (caller -> callee, with counts) and call order."""
+        d = self._trace_file(p["file"])
+        order, edges, stack = [], {}, []
+        for e in d["events"]:
+            if e["ev"] != "call":
+                continue
+            del stack[e["depth"]:]
+            if stack:
+                edges[(stack[-1], e["id"])] = edges.get((stack[-1], e["id"]), 0) + 1
+            stack.append(e["id"])
+            order.append(e["id"])
+        rows = self.graph.query("MATCH (n:Symbol) WHERE n.id IN $ids RETURN n", {"ids": list(dict.fromkeys(order))})
+        return {"input": d.get("input"), "nodes": [_node(r["n"]) for r in rows],
+                "edges": [{"label": "RAN", "src": a, "dst": b, "n": n} for (a, b), n in edges.items()], "order": order}
+
     def routes(self) -> dict:
         return {"/api/search": self.search, "/api/node": self.node, "/api/neighbors": self.neighbors,
-                "/api/subtree": self.subtree, "/api/source": self.source_lines}
+                "/api/subtree": self.subtree, "/api/source": self.source_lines,
+                "/api/traces": self.traces, "/api/trace": self.trace}
 
 
 def make_server(graph: Graph, source: Source, port: int = 8765, routes: dict | None = None,
-                allow_query: bool = False, host: str = "127.0.0.1") -> ThreadingHTTPServer:
-    explorer = Explorer(graph, source)
+                allow_query: bool = False, host: str = "127.0.0.1", traces: str | None = None) -> ThreadingHTTPServer:
+    explorer = Explorer(graph, source, traces)
     table = {**explorer.routes(), **(routes or {})}
     page = files("srcgraph").joinpath("explorer.html").read_bytes()
 

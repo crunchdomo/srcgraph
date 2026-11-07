@@ -12,11 +12,16 @@ from srcgraph.source import Source
 
 
 @pytest.fixture(scope="module")
-def server(tmp_path_factory):
+def traces_dir(tmp_path_factory):
+    return str(tmp_path_factory.mktemp("traces"))
+
+
+@pytest.fixture(scope="module")
+def server(tmp_path_factory, traces_dir):
     cwd = os.getcwd()
     os.chdir("tests/fixtures/pyrepo")   # ids are paths relative to the working directory
     graph, _ = build(["."], (), str(tmp_path_factory.mktemp("db") / "g.lbug"))
-    srv = make_server(graph, Source("."), port=0, routes={"/api/hello": lambda p: {"hi": p.get("x")}})
+    srv = make_server(graph, Source("."), port=0, routes={"/api/hello": lambda p: {"hi": p.get("x")}}, traces=traces_dir)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{srv.server_address[1]}"
     srv.shutdown()
@@ -79,3 +84,24 @@ def test_query_is_refused_unless_allowed(server):
 def test_extra_routes_are_mounted(server):
     assert get(server, "/api/hello?x=1")[1] == {"hi": "1"}
     assert status(server, "/api/nothing") == 404
+
+
+VIEW, CALL = "src/handlers/h.py::src.handlers.h.view", "src/contracts/c.py::src.contracts.c.call"
+
+
+def test_trace_routes_list_saved_runs_and_resolve_one_onto_the_graph(server, traces_dir):
+    with open(os.path.join(traces_dir, "run.json"), "w") as f:
+        json.dump({"input": "x()", "at": "2026-11-07T10:00:00", "events": [
+            {"ev": "call", "sym": "src.handlers.h.view", "id": VIEW, "depth": 0, "args": {}},
+            {"ev": "call", "sym": "src.contracts.c.call", "id": CALL, "depth": 1, "args": {}},
+            {"ev": "return", "depth": 2, "value": "None", "ms": 0.1},
+            {"ev": "call", "sym": "src.contracts.c.call", "id": CALL, "depth": 1, "args": {}},
+            {"ev": "return", "depth": 2, "value": "None", "ms": 0.1},
+            {"ev": "return", "depth": 1, "value": "None", "ms": 0.3}]}, f)
+    _, rows = get(server, "/api/traces")
+    assert rows == [{"file": "run.json", "input": "x()", "at": "2026-11-07T10:00:00", "calls": 3}]
+    _, t = get(server, "/api/trace?file=run.json")
+    assert {n["id"] for n in t["nodes"]} == {VIEW, CALL} and all(n["label"] == "Symbol" for n in t["nodes"])
+    assert t["edges"] == [{"label": "RAN", "src": VIEW, "dst": CALL, "n": 2}]
+    assert t["order"] == [VIEW, CALL, CALL]
+    assert status(server, "/api/trace?file=nope.json") == 404
