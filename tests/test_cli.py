@@ -83,3 +83,31 @@ def test_scope_leads_with_the_compartment_doc_line(tmp_path, monkeypatch, capsys
     capsys.readouterr()
     code, out, _ = run(capsys, "scope", "--db", db, "pkg/**")
     assert code == 0 and out.splitlines()[0] == "pkg/g.py\tGateway to the outside."
+
+
+def test_dead_lists_unreached_symbols_only(built, capsys):
+    code, out, _ = run(capsys, "dead", "--db", built)
+    assert code == 0 and out.splitlines()[0] == "symbol\tpath\tline"
+    names = {l.split("\t")[0] for l in out.splitlines()[1:]}
+    assert "src.handlers.h.leak" in names
+    assert "src.contracts.c.call" not in names   # called by view
+    assert "src.views.Base" not in names   # inherited by View
+    assert "src.views.Repr.__repr__" not in names   # dunders are called by the interpreter
+
+
+def test_hubs_ranks_by_fan_in_plus_fan_out(built, capsys):
+    code, out, _ = run(capsys, "hubs", "--db", built)
+    assert code == 0 and out.splitlines()[0] == "node\tfan_in\tfan_out"
+    totals = [int(a) + int(b) for _, a, b in (l.split("\t") for l in out.splitlines()[1:])]
+    assert totals and totals == sorted(totals, reverse=True)
+    assert any(l.startswith("src/gateway/client.py\t2\t") for l in out.splitlines())
+    assert "src.handlers.h.view\t0\t1" in out.splitlines()   # logging.info is unresolved and not a wire
+
+
+def test_untested_omits_symbols_reached_from_a_test_unit(built, capsys):
+    code, out, _ = run(capsys, "untested", "--db", built)
+    assert code == 0 and out.splitlines()[0] == "symbol\tpath\tline"
+    names = {l.split("\t")[0] for l in out.splitlines()[1:]}
+    assert "src.handlers.h.leak" in names
+    assert "src.contracts.c.call" not in names   # tests/uses_call.py calls it
+    assert not any(n.startswith("tests.") for n in names)   # test code is not itself untested

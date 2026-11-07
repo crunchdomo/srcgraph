@@ -25,3 +25,7 @@ class Plain:
 
 class Dyn(make_base()):
     pass
+
+class Repr:
+    def __repr__(self):
+        return "r"
