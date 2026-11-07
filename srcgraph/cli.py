@@ -15,7 +15,9 @@ from srcgraph.serve import make_server
 from srcgraph.source import Source
 
 DB = ".srcgraph/graph.lbug"
-# Presets: the common questions without Cypher. name -> (help, empty message, cypher over $name and $prefix)
+# Presets: the common questions without Cypher. name -> (help, empty message, cypher). A cypher that mentions
+# $name takes a positional argument (also bound as $prefix = name + "."); the structure presets take none.
+WIRES = "CALLS|IMPORTS|REFERENCES|INHERITS"
 PRESETS = {
     "importers": ("units that import a module or any of its submodules", "no importers of {}",
                   "MATCH (u:Unit)-[i:IMPORTS]->(v:Unit) WHERE v.name = $name OR v.name STARTS WITH $prefix "
@@ -23,6 +25,23 @@ PRESETS = {
     "callers": ("symbols and units that call a symbol, by name or qualified name", "no callers of {}",
                 "MATCH (c)-[r:CALLS]->(s:Symbol) WHERE s.name = $name OR s.qualified = $name "
                 "RETURN coalesce(c.qualified, c.path) AS caller, r.line AS line, s.qualified AS target ORDER BY caller, line"),
+    "dead": ("symbols nothing calls, references, inherits or decorates, and that are not entry points (candidates: "
+             "getattr and registries are invisible)", "nothing is dead",
+             "MATCH (s:Symbol) WHERE s.kind IN ['function', 'method', 'class'] AND NOT s.entry AND NOT s.name STARTS WITH '__' "
+             "OPTIONAL MATCH ()-[r:CALLS|REFERENCES|INHERITS|DECORATES]->(s) WITH s, count(r) AS n WHERE n = 0 "
+             "RETURN s.qualified AS symbol, s.path AS path, s.line AS line ORDER BY path, line"),
+    "hubs": ("symbols and units with the most wires in and out: what you must not break, and what does too much",
+             "no wires at all",
+             f"MATCH (n:Symbol:Unit) WHERE NOT n.kind IN ['unresolved', 'builtin', 'external'] "
+             f"OPTIONAL MATCH ()-[i:{WIRES}]->(n) WITH n, count(i) AS fan_in "
+             f"OPTIONAL MATCH (n)-[o:{WIRES}]->(b) WHERE NOT b.kind IN ['unresolved', 'builtin'] "
+             "WITH n, fan_in, count(o) AS fan_out WHERE fan_in + fan_out > 0 "
+             "RETURN coalesce(n.qualified, n.path) AS node, fan_in, fan_out ORDER BY fan_in + fan_out DESC, node LIMIT 30"),
+    "untested": ("symbols no test unit reaches through calls (up to six hops)", "everything is reached from a test",
+                 # ponytail: 6-hop expansion from every test unit; precompute a reached set if a big repo makes this slow
+                 "MATCH (u:Unit)-[:CONTAINS*1..3]->(s:Symbol) WHERE NOT u.test AND s.kind IN ['function', 'method', 'class'] "
+                 "OPTIONAL MATCH (t:Unit {test: true})-[:CONTAINS|CALLS*1..6]->(s) WITH s, count(t) AS n WHERE n = 0 "
+                 "RETURN s.qualified AS symbol, s.path AS path, s.line AS line ORDER BY path, line"),
 }
 
 
@@ -44,10 +63,11 @@ def _parser() -> argparse.ArgumentParser:
         sp.add_argument("--exclude", action="append", default=[], help="extra exclude name or glob (repeatable)")
         sp.add_argument("--db", default=DB, help=f"graph database file (default {DB})")
 
-    def ro(sp, positional, help_=None):
+    def ro(sp, positional=None, help_=None):
         sp.add_argument("--db", default=DB)
         sp.add_argument("--format", choices=["text", "json"], default="text")
-        sp.add_argument(positional, help=help_)
+        if positional:
+            sp.add_argument(positional, help=help_)
 
     common(sub.add_parser("build", help="build the graph database"))
     s = sub.add_parser("serve", help="build, then open the explorer in the browser")
@@ -56,8 +76,8 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--no-build", action="store_true", help="serve the existing database")
     s.add_argument("--allow-query", action="store_true", help="enable POST /api/query (raw Cypher)")
     ro(sub.add_parser("query", help="run Cypher against the last built graph"), "cypher")
-    for name, (help_, _, _) in PRESETS.items():
-        ro(sub.add_parser(name, help=help_), "name")
+    for name, (help_, _, cypher) in PRESETS.items():
+        ro(sub.add_parser(name, help=help_), "name" if "$name" in cypher else None)
     ro(sub.add_parser("scope", help="one compartment: its doc line, internal wiring, outbound and inbound wires"),
        "glob", "path glob for the compartment, e.g. 'src/gui/**'")
     ro(sub.add_parser("trace", help="run an expression in the interpreter on PATH and print the calls it makes through the graph"),
@@ -148,10 +168,11 @@ def _run(args, out, err) -> int:
         return code
     if args.command in PRESETS:
         _, empty, cypher = PRESETS[args.command]
+        name = getattr(args, "name", "")
         with Graph.open(args.db) as graph:
-            rows = graph.query(cypher, {"name": args.name, "prefix": args.name + "."})
+            rows = graph.query(cypher, {"name": name, "prefix": name + "."} if name else None)
         if not rows:
-            print(empty.format(args.name), file=err)
+            print(empty.format(name), file=err)
             return 1
         _print(rows, args.format, out)
         return 0

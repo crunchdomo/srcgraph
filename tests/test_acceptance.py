@@ -6,6 +6,7 @@ import os
 
 import pytest
 
+from srcgraph.cli import PRESETS
 from srcgraph.graph import Graph
 from srcgraph.scan import scan
 
@@ -49,3 +50,8 @@ def test_unresolved_call_share_under_ceiling(graph):
     total = sum(counts.values())
     share = counts.get(True, 0) / total
     assert share < UNRESOLVED_CALL_CEILING, f"{counts.get(True, 0)}/{total} calls unresolved ({share:.3f})"
+
+
+@pytest.mark.parametrize("name", [n for n, (_, _, cypher) in PRESETS.items() if "$name" not in cypher])
+def test_structure_preset_returns_rows(graph, name):
+    assert graph.query(PRESETS[name][2]), f"'{name}' returned no rows"
