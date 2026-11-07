@@ -26,3 +26,6 @@ class Shape:
 
 def use(s):
     return s.area()
+
+def twice(x):
+    return echo(echo(x))

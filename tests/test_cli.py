@@ -96,6 +96,9 @@ def test_dead_lists_unreached_symbols_only(built, capsys):
     assert "tests.uses_call.test_call" not in names   # test code is reached by the runner
     assert "src.boom.Shape.area" not in names   # s.area() somewhere: a method with its name called on an instance
     assert "src.boom.Shape.never" in names
+    assert "src.views.handler" not in names   # decorated: a framework registered it
+    assert "src.views.Parser.handle_data" not in names   # overrides a method of an external base: the framework calls it
+    assert "src.views.Parser.helper" not in names   # the graph cannot tell an override from a plain method there
 
 
 def test_hubs_ranks_by_fan_in_plus_fan_out(built, capsys):
@@ -105,6 +108,16 @@ def test_hubs_ranks_by_fan_in_plus_fan_out(built, capsys):
     assert totals and totals == sorted(totals, reverse=True)
     assert any(l.startswith("src/gateway/client.py\t2\t") for l in out.splitlines())
     assert "src.handlers.h.view\t0\t1" in out.splitlines()   # logging.info is unresolved and not a wire
+    assert "src.boom.echo\t1\t0" in out.splitlines()   # twice calls echo twice: one neighbour, not two call sites
+
+
+def test_untested_without_test_units_says_so(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir("tests/fixtures/pyrepo")
+    db = str(tmp_path / "g.lbug")
+    assert main(["build", "--db", db, "--src", "src"]) == 0
+    capsys.readouterr()
+    code, out, err = run(capsys, "untested", "--db", db)
+    assert code == 1 and out == "" and "no test units" in err
 
 
 def test_untested_omits_symbols_reached_from_a_test_unit(built, capsys):

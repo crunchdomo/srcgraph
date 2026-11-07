@@ -33,15 +33,21 @@ PRESETS = {
              "MATCH (u:Unit)-[:CONTAINS*1..3]->(s:Symbol) WHERE NOT u.test AND s.kind IN ['function', 'method', 'class'] "
              "AND NOT s.entry AND NOT s.name STARTS WITH '__' "
              "OPTIONAL MATCH ()-[r:CALLS|REFERENCES|INHERITS|DECORATES]->(s) WITH s, count(r) AS n WHERE n = 0 "
+             # decorated: a framework registered it (routes, tasks, signals); DECORATES points from the symbol to the decorator
+             "OPTIONAL MATCH (s)-[d:DECORATES]->() WITH s, count(d) AS deco WHERE deco = 0 "
+             # a method on a subclass of something external overrides a hook the framework calls (paintEvent, handle_data)
+             # ponytail: every method on such a class is skipped; telling overrides apart needs the base's method list
+             "OPTIONAL MATCH (c:Symbol)-[:CONTAINS]->(s) WHERE s.kind = 'method' "
+             "OPTIONAL MATCH (c)-[:INHERITS]->(b) WHERE b.kind IN ['unresolved', 'external'] WITH s, count(b) AS ext WHERE ext = 0 "
              "OPTIONAL MATCH (x:Ast {norm: 'Attribute'}) WHERE s.kind = 'method' AND ends_with(x.text, concat('.', s.name)) "
              "WITH s, count(x) AS m WHERE m = 0 "
              "RETURN s.qualified AS symbol, s.path AS path, s.line AS line ORDER BY path, line"),
-    "hubs": ("symbols and units with the most wires in and out: what you must not break, and what does too much",
+    "hubs": ("symbols and units with the most distinct neighbours in and out: what you must not break, and what does too much",
              "no wires at all",
              f"MATCH (n:Symbol:Unit) WHERE NOT n.kind IN ['unresolved', 'builtin', 'external'] "
-             f"OPTIONAL MATCH ()-[i:{WIRES}]->(n) WITH n, count(i) AS fan_in "
-             f"OPTIONAL MATCH (n)-[o:{WIRES}]->(b) WHERE NOT b.kind IN ['unresolved', 'builtin'] "
-             "WITH n, fan_in, count(o) AS fan_out WHERE fan_in + fan_out > 0 "
+             f"OPTIONAL MATCH (a)-[:{WIRES}]->(n) WITH n, count(DISTINCT a) AS fan_in "
+             f"OPTIONAL MATCH (n)-[:{WIRES}]->(b) WHERE NOT b.kind IN ['unresolved', 'builtin'] "
+             "WITH n, fan_in, count(DISTINCT b) AS fan_out WHERE fan_in + fan_out > 0 "
              "RETURN coalesce(n.qualified, n.path) AS node, fan_in, fan_out ORDER BY fan_in + fan_out DESC, node LIMIT 30"),
     "untested": ("symbols no test unit reaches through calls (up to six hops)", "everything is reached from a test",
                  # ponytail: 6-hop expansion from every test unit; precompute a reached set if a big repo makes this slow
@@ -232,6 +238,9 @@ def _run(args, out, err) -> int:
         _, empty, cypher = PRESETS[args.command]
         name = getattr(args, "name", "")
         with Graph.open(args.db) as graph:
+            if args.command == "untested" and not graph.query("MATCH (u:Unit {test: true}) RETURN u.id LIMIT 1"):
+                print("no test units: nothing reaches anything", file=err)
+                return 1
             rows = graph.query(cypher, {"name": name, "prefix": name + "."} if name else None)
         if not rows:
             print(empty.format(name), file=err)
