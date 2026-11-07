@@ -1,4 +1,4 @@
-"""Run one expression under sys.settrace inside the target repo's interpreter.
+"""Run one expression, or one pytest test, under sys.settrace inside the target repo's interpreter.
 
 Launched by `srcgraph trace` as a plain script, so it must stay stdlib-only: the target's
 interpreter need not have srcgraph installed. Emits one JSON event per line to the events file.
@@ -8,6 +8,9 @@ import json
 import os
 import sys
 from time import perf_counter
+
+if sys.path and sys.path[0] == os.path.dirname(os.path.abspath(__file__)):
+    sys.path.pop(0)   # run by path, the script dir is the srcgraph package and would shadow stdlib modules like selectors
 
 LIMIT = 60
 
@@ -54,7 +57,7 @@ def main(table_path: str, events_path: str, expr: str) -> int:
     def local(frame, event, arg):
         if event == "exception":
             raised.add(id(frame))
-            emit(ev="exc", depth=depth(frame) + 1, text=f"{arg[0].__name__}: {arg[1]}")
+            emit(ev="exc", depth=depth(frame) + 1, text=f"{arg[0].__name__}: {str(arg[1]).splitlines()[0] if str(arg[1]) else ''}")
         elif event == "return":
             ms = (perf_counter() - started.pop(id(frame), perf_counter())) * 1000
             if id(frame) not in raised:
@@ -73,6 +76,14 @@ def main(table_path: str, events_path: str, expr: str) -> int:
         return local
 
     sys.path.insert(0, os.getcwd())
+    if "::" in expr or expr.endswith(".py"):   # a pytest node id: pytest owns the result, the test function is the root
+        import pytest
+        sys.settrace(tracer)
+        try:
+            return int(pytest.main([expr, "-q", "--tb=no", "-p", "no:cacheprovider"]))   # the tree is the report
+        finally:
+            sys.settrace(None)
+            events.close()
     parts = expr.split("(", 1)[0].strip().split(".")
     for i in range(len(parts), 0, -1):   # import the longest importable prefix before tracing starts
         try:
