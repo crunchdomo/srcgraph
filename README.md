@@ -42,6 +42,26 @@ The presets answer the common questions without Cypher; `--format json` works on
 
 `--src` repeats and sets the import roots: with a `src/` layout pass `--src src`. `--exclude` adds names or globs to the defaults: every hidden directory, `venv`, `node_modules`, `__pycache__`. A pattern without `/` matches one path component at any depth; with `/` it matches from the root. Inside a git repository the file list comes from `git ls-files`, so anything `.gitignore` hides (build output, `cdk.out/`, generated code) is never scanned; untracked files that are not ignored still are.
 
+## As a library
+
+The same answers from Python, for notebooks, scripts and tools built on top (adrgraph is one):
+
+```python
+import srcgraph
+
+g = srcgraph.load(".")              # builds .srcgraph/graph.lbug when missing; rebuild=True forces it
+g.dead()                            # the rows the CLI prints, as a list of dicts
+g.hubs(); g.untested()
+g.callers("score_one"); g.importers("requests")
+g.scope("app/**")                   # {"doc": [...], "internal": [...], "outbound": [...], "inbound": [...]}
+g.trace("app.predictor.score_one({...})")   # call/return/exc events; runs in the repo's root
+g.query("MATCH (a:Unit)-[:IMPORTS]->(b:Unit {kind: 'external'}) RETURN b.name, count(*) ORDER BY count(*) DESC")
+```
+
+Rows are plain dicts, so `pandas.DataFrame(g.hubs())` works without srcgraph knowing about pandas. `load` accepts
+`db`, `src` (source roots relative to the root) and `excludes`; `Repo` is a context manager. The CLI presets call the
+same object, so the two cannot disagree.
+
 ## The graph
 
 **Semantic tier.** `Unit` (file, package, module, or an `external` import such as `logging`) and `Symbol` (function, method, class, variable, Terraform resource, ...). Both carry `doc`, the first paragraph of their docstring, so "what is this for" is a query, not a file read. A `Unit` has `test` (under a `tests` directory or named `test_*.py`); a `Symbol` has `entry` (reached from a `__main__` guard, a console script in `pyproject.toml`, or a test). Edges, each carrying the source `line`: `CONTAINS`, `IMPORTS`, `CALLS`, `REFERENCES`, `INHERITS`, `DECORATES`. `REFERENCES` covers a dotted attribute read and a bare name used as a value or annotation (`pool.map(worker, ...)`, `def f(x: Thing)`), the latter only when it resolves to a scanned symbol outside the reader's own globals. Calls to Python builtins land on one shared `Symbol` of kind `builtin` per name (`builtins.print`), unless the module defines or imports its own. Other unresolved names become `Symbol` nodes of kind `unresolved` so nothing is silently dropped.

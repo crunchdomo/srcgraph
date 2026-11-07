@@ -235,13 +235,13 @@ def _run(args, out, err) -> int:
             print(line, file=out)
         return code
     if args.command in PRESETS:
-        _, empty, cypher = PRESETS[args.command]
-        name = getattr(args, "name", "")
-        with Graph.open(args.db) as graph:
-            if args.command == "untested" and not graph.query("MATCH (u:Unit {test: true}) RETURN u.id LIMIT 1"):
+        from srcgraph.api import Repo   # the same object library users get, so the two cannot drift
+        empty, name = PRESETS[args.command][1], getattr(args, "name", "")
+        with Repo(Graph.open(args.db), args.db) as repo:
+            if args.command == "untested" and not repo.query("MATCH (u:Unit {test: true}) RETURN u.id LIMIT 1"):
                 print("no test units: nothing reaches anything", file=err)
                 return 1
-            rows = graph.query(cypher, {"name": name, "prefix": name + "."} if name else None)
+            rows = getattr(repo, args.command)(name) if name else getattr(repo, args.command)()
         if not rows:
             print(empty.format(name), file=err)
             return 1
