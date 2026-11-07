@@ -171,12 +171,12 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
                 qualified = f"{base}{dot}{rest}"
                 if head not in amap and head in BUILTIN_NAMES and (lang, "", f"{src_unit.name}.{head}") not in by_qualified:
                     target = builtin(ref.name, lang)
-                    res.edges.append(Edge(REF_RELATIONS[ref.relation], ref.src_id, target, line=ref.line))
+                    res.edges.append(Edge(REF_RELATIONS[ref.relation], ref.src_id, target, line=ref.line, guard=ref.guard))
                     continue
             else:
                 qualified = ref.name
             target = by_qualified.get((lang, scope(lang, src_unit.path), qualified)) or unresolved(qualified, lang)
-            res.edges.append(Edge(REF_RELATIONS[ref.relation], ref.src_id, target, line=ref.line))
+            res.edges.append(Edge(REF_RELATIONS[ref.relation], ref.src_id, target, line=ref.line, guard=ref.guard))
             if ref.relation == "calls" and (ref.entry or src_unit.test):
                 entry_ids.add(target)
     for root in roots:  # console scripts declared in pyproject.toml: "pkg.mod:func"

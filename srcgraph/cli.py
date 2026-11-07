@@ -25,7 +25,7 @@ PRESETS = {
                   "RETURN u.path AS importer, i.line AS line, v.name AS module ORDER BY importer, line"),
     "callers": ("symbols and units that call a symbol, by name or qualified name", "no callers of {}",
                 "MATCH (c)-[r:CALLS]->(s:Symbol) WHERE s.name = $name OR s.qualified = $name "
-                "RETURN coalesce(c.qualified, c.path) AS caller, r.line AS line, s.qualified AS target ORDER BY caller, line"),
+                "RETURN coalesce(c.qualified, c.path) AS caller, r.line AS line, s.qualified AS target, r.guard AS guard ORDER BY caller, line"),
     "dead": ("symbols nothing calls, references, inherits or decorates, and that are not entry points (candidates: "
              "getattr and registries are invisible)", "nothing is dead",
              # a method whose name is accessed on anything anywhere (an x.name attribute in the syntax tier) is not
@@ -107,7 +107,8 @@ def scope(graph: Graph, glob: str, no_tests: bool = False) -> tuple[int, dict[st
         return graph.query(f"MATCH (a)-[r:CALLS|REFERENCES|INHERITS|IMPORTS]->(b){tests} WHERE {where} "
                            f"AND NOT b.kind IN ['unresolved', 'builtin']{not_tests} "
                            f"RETURN coalesce(a.qualified, a.path) AS source, label(r) AS label, "
-                           f"coalesce(b.qualified, b.name) AS target, r.line AS line ORDER BY source, line, target", params)
+                           f"coalesce(b.qualified, b.name) AS target, r.line AS line, coalesce(r.guard, '') AS guard "
+                           f"ORDER BY source, line, target", params)
     return matched, {
         "doc": graph.query(f"MATCH (a:Unit) WHERE {a} RETURN a.path AS path, a.doc AS doc ORDER BY path", params),
         "internal": edges(f"({a}) AND ({b})"),

@@ -39,8 +39,8 @@ def test_importers_lists_units_importing_a_module_or_its_submodules(built, capsy
 
 def test_callers_lists_callers_with_lines(built, capsys):
     code, out, _ = run(capsys, "callers", "--db", built, "call")
-    assert code == 0 and out.splitlines()[0] == "caller\tline\ttarget"
-    assert any("src.handlers.h.view\t" in l and l.endswith("src.contracts.c.call") for l in out.splitlines())
+    assert code == 0 and out.splitlines()[0] == "caller\tline\ttarget\tguard"
+    assert any("src.handlers.h.view\t" in l and l.endswith("src.contracts.c.call\t") for l in out.splitlines())
     code, out, _ = run(capsys, "callers", "--db", built, "--format", "json", "src.contracts.c.call")
     assert code == 0 and '"caller"' in out
 
@@ -59,11 +59,11 @@ def test_scope_shows_internal_outbound_and_inbound_wires(built, capsys):
             cur = line.split()[1]; sec[cur] = []
         elif cur:   # lines before the first section are the file header
             sec[cur].append(line)
-    assert "src.contracts.c.call\tCALLS\tsrc.contracts.c.Contract\t8" in sec["internal"]
-    assert "src.contracts.c.Contract.send\tCALLS\tsrc.gateway.client.post\t5" in sec["outbound"]
-    assert "src/contracts/c.py\tIMPORTS\tsrc.gateway.client\t1" in sec["outbound"]
-    assert "src.handlers.h.view\tCALLS\tsrc.contracts.c.call\t6" in sec["inbound"]
-    assert "src/handlers/h.py\tIMPORTS\tsrc.contracts.c\t2" in sec["inbound"]
+    assert "src.contracts.c.call\tCALLS\tsrc.contracts.c.Contract\t8\t" in sec["internal"]
+    assert "src.contracts.c.Contract.send\tCALLS\tsrc.gateway.client.post\t5\t" in sec["outbound"]
+    assert "src/contracts/c.py\tIMPORTS\tsrc.gateway.client\t1\t" in sec["outbound"]
+    assert "src.handlers.h.view\tCALLS\tsrc.contracts.c.call\t6\t" in sec["inbound"]
+    assert "src/handlers/h.py\tIMPORTS\tsrc.contracts.c\t2\t" in sec["inbound"]
 
 
 def test_scope_json_and_empty_glob(built, capsys):
@@ -130,4 +130,14 @@ def test_scope_no_tests_hides_wires_touching_test_units(built, capsys):
     code, out, _ = run(capsys, "scope", "--db", built, "--no-tests", "src/contracts/**")
     assert code == 0
     assert not any(l.startswith(("tests/", "tests.")) for l in out.splitlines())
-    assert "src.handlers.h.view\tCALLS\tsrc.contracts.c.call\t6" in out
+    assert "src.handlers.h.view\tCALLS\tsrc.contracts.c.call\t6\t" in out
+
+
+def test_callers_and_scope_show_the_guard_column(built, capsys):
+    code, out, _ = run(capsys, "callers", "--db", built, "inner_ok")
+    assert code == 0 and out.splitlines()[0] == "caller\tline\ttarget\tguard"
+    assert "src.boom.loop\t12\tsrc.boom.inner_ok\tfor@11" in out.splitlines()
+    code, out, _ = run(capsys, "scope", "--db", built, "src/boom.py")
+    assert code == 0 and "== internal" in out
+    assert "src.boom.loop\tCALLS\tsrc.boom.inner_ok\t12\tfor@11" in out.splitlines()
+    assert "src.boom.boom\tCALLS\tsrc.boom.inner\t2\t" in out.splitlines()

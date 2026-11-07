@@ -197,3 +197,15 @@ def test_symbol_doc_for_function_class_and_none():
 
 def test_module_without_docstring_has_empty_doc():
     assert _extract("x = 1\n").units[0].doc == ""
+
+
+def test_call_refs_carry_the_nearest_enclosing_guard():
+    ex = _src("def f(x):\n    if x:\n        g()\n    for i in x:\n        h()\n    try:\n        m()\n    except E:\n        n()\n    while x:\n        w()\n    k()\n")
+    guards = {r.name: r.guard for r in ex.refs if r.relation == "calls"}
+    assert guards == {"g": "if@2", "h": "for@4", "m": "try@6", "n": "try@6", "w": "while@10", "k": ""}
+
+
+def test_guard_does_not_leak_into_a_nested_definition():
+    ex = _src("if cond:\n    def f():\n        g()\n    h()\n")
+    guards = {r.name: r.guard for r in ex.refs if r.relation == "calls"}
+    assert guards == {"g": "", "h": "if@1"}

@@ -109,6 +109,9 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
         ex.edges.append(Edge("DERIVED_FROM", sym.id, ast_id(rel_path, node)))
         return sym
 
+    GUARDS = {"if_statement": "if", "for_statement": "for", "while_statement": "while", "try_statement": "try"}
+    guards: list[str] = []
+
     def define(node: Node, scope: str, owner: str, in_class: bool) -> str | None:
         """Create the symbol for a function/class definition node, walk its body, return the symbol id."""
         name_node = node.child_by_field_name("name")
@@ -134,7 +137,9 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
             is_class = node.type == "class_definition"
             stack = classes if is_class else scopes
             stack.append(qualified if is_class else params(node))
+            guards.append("")
             walk(body, qualified, sym.id, is_class, not is_class)
+            guards.pop()
             stack.pop()
         return sym.id
 
@@ -142,6 +147,8 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
         nonlocal in_main
         for child in node.children:
             t = child.type
+            if t in GUARDS:
+                guards.append(f"{GUARDS[t]}@{lines.line(child.start_byte)}")
             if t in ("import_statement", "import_from_statement", "future_import_statement"):
                 ex.imports.extend(_imports(child, rel_path, lines))
             elif t in ("function_definition", "class_definition") and not in_function:
@@ -176,9 +183,9 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
                 if head in ("self", "cls"):
                     # self.m() resolves to the enclosing class's own m; self.attr.m() needs the attribute's type, so it is dropped
                     if classes and method and "." not in method:
-                        self_calls.append((owner, f"{classes[-1]}.{method}", lines.line(child.start_byte)))
+                        self_calls.append((owner, f"{classes[-1]}.{method}", lines.line(child.start_byte), guard()))
                 elif name and not is_local(name):
-                    ex.refs.append(RawRef(owner, name, lines.line(child.start_byte), "calls", entry=in_main))
+                    ex.refs.append(RawRef(owner, name, lines.line(child.start_byte), "calls", entry=in_main, guard=guard()))
                 else:
                     walk(child, scope, owner, in_class, in_function)
                     continue
@@ -201,9 +208,14 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
                     walk(child, scope, owner, in_class, in_function)
             else:
                 walk(child, scope, owner, in_class, in_function)
+            if t in GUARDS:
+                guards.pop()
+
+    def guard() -> str:
+        return guards[-1] if guards else ""
 
     walk(tree.root_node, module_name, rel_path, False, False)
     defined = {s.qualified for s in ex.symbols}
-    ex.edges.extend(Edge("CALLS", owner, symbol_id(rel_path, target), line)
-                    for owner, target, line in self_calls if target in defined)
+    ex.edges.extend(Edge("CALLS", owner, symbol_id(rel_path, target), line, guard=g)
+                    for owner, target, line, g in self_calls if target in defined)
     return ex

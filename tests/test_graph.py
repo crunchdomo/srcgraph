@@ -143,3 +143,13 @@ def test_test_and_entry_flags_are_stored(tmp_path):
     assert g.query("MATCH (u:Unit) RETURN u.test AS t") == [{"t": True}]
     assert g.query("MATCH (s:Symbol) RETURN s.entry AS e") == [{"e": True}]
     g.close()
+
+
+def test_calls_edge_round_trips_its_guard(tmp_path):
+    g = Graph(str(tmp_path / "g.lbug"))
+    s = Symbol("src/b.py::b.f", "f", "b.f", "function", "python", "src/b.py", 3, 5, "function_definition")
+    g.load_nodes("Unit", unit_rows())
+    g.load_nodes("Symbol", [vars(s)])
+    g.load_edges([Edge("CALLS", "src/a.py", "src/b.py::b.f", 7, guard="if@6")])
+    assert g.query("MATCH ()-[r:CALLS]->() RETURN r.line AS line, r.guard AS guard") == [{"line": 7, "guard": "if@6"}]
+    g.close()
