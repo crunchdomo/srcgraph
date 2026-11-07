@@ -183,3 +183,16 @@ def test_hidden_dirs_are_excluded_by_default_and_name_globs_match_at_any_depth(t
     monkeypatch.chdir(tmp_path)
     assert [u.id for u in scan(["."]).units] == ["ok.py", "pkg/gen_z.py"]
     assert [u.id for u in scan(["."], excludes=(".*", "gen_*.py")).units] == ["ok.py"]
+
+
+def test_gitignored_files_are_skipped_inside_a_git_repo(tmp_path, monkeypatch):
+    import subprocess
+    for p in ("a.py", "build/b.py", "c.py", "venv/v.py"):
+        (tmp_path / p).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / p).write_text("x = 1\n")
+    (tmp_path / ".gitignore").write_text("build/\n")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "a.py", ".gitignore"], cwd=tmp_path, check=True)
+    monkeypatch.chdir(tmp_path)
+    # a.py tracked, c.py untracked but not ignored, build/ ignored by git, venv/ by the default excludes
+    assert [u.id for u in scan(["."]).units] == ["a.py", "c.py"]
