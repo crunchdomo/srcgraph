@@ -1,9 +1,13 @@
-"""srcgraph command line: build, query, serve, the presets importers and callers, and scope."""
+"""srcgraph command line: build, query, serve, the presets importers and callers, scope, and trace."""
 import argparse
 import json
+import os
+import shutil
+import subprocess
 import sys
+import tempfile
 
-from srcgraph import __version__
+from srcgraph import __version__, tracer
 from srcgraph.graph import Graph
 from srcgraph.scan import DEFAULT_EXCLUDES, scan
 from srcgraph.selectors import SelectorError, compile_selector
@@ -56,6 +60,8 @@ def _parser() -> argparse.ArgumentParser:
         ro(sub.add_parser(name, help=help_), "name")
     ro(sub.add_parser("scope", help="one compartment: its doc line, internal wiring, outbound and inbound wires"),
        "glob", "path glob for the compartment, e.g. 'src/gui/**'")
+    ro(sub.add_parser("trace", help="run an expression in the interpreter on PATH and print the calls it makes through the graph"),
+       "expr", "python expression, e.g. 'pkg.mod.f(1)'; activate the target's venv first")
     return p
 
 
@@ -77,6 +83,21 @@ def scope(graph: Graph, glob: str) -> tuple[int, dict[str, list[dict]]]:
         "outbound": edges(f"({a}) AND NOT ({b})"),
         "inbound": edges(f"NOT ({a}) AND ({b})"),
     }
+
+
+def trace(graph: Graph, expr: str) -> tuple[int, list[dict]]:
+    """Run expr under srcgraph/tracer.py in the `python` on PATH; returns (exit code, call/return/exc events).
+    Symbol paths are relative to the build's cwd, so run this where you ran build."""
+    table: dict[str, dict[str, list]] = {}
+    for r in graph.query("MATCH (s:Symbol) WHERE s.kind IN ['function', 'method'] "
+                         "RETURN s.path AS path, s.name AS name, s.line AS line, s.qualified AS q ORDER BY line"):
+        table.setdefault(os.path.abspath(r["path"]), {}).setdefault(r["name"], []).append([r["line"], r["q"]])
+    with tempfile.TemporaryDirectory() as d:
+        tp, ep = os.path.join(d, "table.json"), os.path.join(d, "events.jsonl")
+        json.dump(table, open(tp, "w"))
+        proc = subprocess.run([shutil.which("python") or sys.executable, tracer.__file__, tp, ep, expr])
+        events = [json.loads(l) for l in open(ep)] if os.path.exists(ep) else []
+    return proc.returncode, events
 
 
 def _print(rows, fmt: str, out) -> int:
@@ -110,6 +131,21 @@ def _run(args, out, err) -> int:
             print(f"== {name} ({len(sections[name])})", file=out)
             _print(sections[name], "text", out)
         return 0
+    if args.command == "trace":
+        with Graph.open(args.db) as graph:
+            code, events = trace(graph, args.expr)
+        if args.format == "json":
+            _print(events, "json", out)
+            return code
+        for ev in events:
+            pad = "  " * ev["depth"]
+            if ev["ev"] == "call":
+                print(f"{pad}{ev['sym']}({', '.join(f'{k}={v}' for k, v in ev['args'].items())})", file=out)
+            elif ev["ev"] == "return":
+                print(f"{pad}= {ev['value']}", file=out)
+            else:
+                print(f"{pad}! {ev['text']}", file=out)
+        return code
     if args.command in PRESETS:
         _, empty, cypher = PRESETS[args.command]
         with Graph.open(args.db) as graph:
