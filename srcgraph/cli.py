@@ -84,27 +84,32 @@ def _parser() -> argparse.ArgumentParser:
     ro(sub.add_parser("query", help="run Cypher against the last built graph"), "cypher")
     for name, (help_, _, cypher) in PRESETS.items():
         ro(sub.add_parser(name, help=help_), "name" if "$name" in cypher else None)
-    ro(sub.add_parser("scope", help="one compartment: its doc line, internal wiring, outbound and inbound wires"),
-       "glob", "path glob for the compartment, e.g. 'src/gui/**'")
+    sp = sub.add_parser("scope", help="one compartment: its files with doc lines, internal wiring, outbound and inbound wires")
+    ro(sp, "glob", "path glob for the compartment, e.g. 'src/gui/**'")
+    sp.add_argument("--no-tests", action="store_true", help="hide wires that touch a test unit")
     ro(sub.add_parser("trace", help="run an expression in the interpreter on PATH and print the calls it makes through the graph"),
        "expr", "python expression, e.g. 'pkg.mod.f(1)', or a pytest node id like tests/test_x.py::test_y; activate the target's venv first")
     return p
 
 
-def scope(graph: Graph, glob: str) -> tuple[int, dict[str, list[dict]]]:
+def scope(graph: Graph, glob: str, no_tests: bool = False) -> tuple[int, dict[str, list[dict]]]:
     """What happens inside one compartment and what crosses its boundary. Returns (matched node count, sections)."""
     a, pa = compile_selector({"path": glob}, "a", "a")
     b, pb = compile_selector({"path": glob}, "b", "b")
     params = {**pa, **pb}
     matched = graph.query(f"MATCH (a) WHERE {a} RETURN count(*) AS c", params)[0]["c"]
+    # a symbol's unit is the Unit with its path; --no-tests drops wires with a test unit at either end
+    tests = ", (ua:Unit), (ub:Unit)" if no_tests else ""
+    not_tests = " AND ua.path = a.path AND ub.path = b.path AND NOT ua.test AND NOT ub.test" if no_tests else ""
 
     def edges(where: str) -> list[dict]:
         # unresolved and builtin targets are not wires that land anywhere worth drawing
-        return graph.query(f"MATCH (a)-[r:CALLS|REFERENCES|INHERITS|IMPORTS]->(b) WHERE {where} AND NOT b.kind IN ['unresolved', 'builtin'] "
+        return graph.query(f"MATCH (a)-[r:CALLS|REFERENCES|INHERITS|IMPORTS]->(b){tests} WHERE {where} "
+                           f"AND NOT b.kind IN ['unresolved', 'builtin']{not_tests} "
                            f"RETURN coalesce(a.qualified, a.path) AS source, label(r) AS label, "
                            f"coalesce(b.qualified, b.name) AS target, r.line AS line ORDER BY source, line, target", params)
     return matched, {
-        "doc": graph.query(f"MATCH (a:Unit) WHERE {a} AND a.doc <> '' RETURN a.path AS path, a.doc AS doc ORDER BY path", params),
+        "doc": graph.query(f"MATCH (a:Unit) WHERE {a} RETURN a.path AS path, a.doc AS doc ORDER BY path", params),
         "internal": edges(f"({a}) AND ({b})"),
         "outbound": edges(f"({a}) AND NOT ({b})"),
         "inbound": edges(f"NOT ({a}) AND ({b})"),
@@ -201,7 +206,7 @@ def _run(args, out, err) -> int:
         return 0
     if args.command == "scope":
         with Graph.open(args.db) as graph:
-            matched, sections = scope(graph, args.glob)
+            matched, sections = scope(graph, args.glob, args.no_tests)
         if not matched:
             print(f"nothing matches {args.glob}", file=err)
             return 1

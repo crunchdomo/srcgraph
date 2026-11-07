@@ -53,11 +53,11 @@ def test_preset_with_no_rows_exits_1(built, capsys):
 def test_scope_shows_internal_outbound_and_inbound_wires(built, capsys):
     code, out, _ = run(capsys, "scope", "--db", built, "src/contracts/**")
     assert code == 0
-    sec = {}
+    sec, cur = {}, None
     for line in out.splitlines():
         if line.startswith("== "):
             cur = line.split()[1]; sec[cur] = []
-        else:
+        elif cur:   # lines before the first section are the file header
             sec[cur].append(line)
     assert "src.contracts.c.call\tCALLS\tsrc.contracts.c.Contract\t8" in sec["internal"]
     assert "src.contracts.c.Contract.send\tCALLS\tsrc.gateway.client.post\t5" in sec["outbound"]
@@ -115,3 +115,19 @@ def test_untested_omits_symbols_reached_from_a_test_unit(built, capsys):
     assert "src.contracts.c.call" not in names   # tests/uses_call.py calls it
     assert not any(n.startswith("tests.") for n in names)   # test code is not itself untested
     assert "src.contracts.c.Contract.send" in names   # reaching the class does not reach its methods
+
+
+def test_scope_lists_every_file_in_the_compartment_documented_or_not(built, capsys):
+    code, out, _ = run(capsys, "scope", "--db", built, "src/contracts/**")
+    lines = out.splitlines()
+    head = lines[:next(i for i, l in enumerate(lines) if l.startswith("== "))]
+    assert head == ["src/contracts/__init__.py\t", "src/contracts/c.py\t"]   # no docstrings, still listed
+
+
+def test_scope_no_tests_hides_wires_touching_test_units(built, capsys):
+    _, out, _ = run(capsys, "scope", "--db", built, "src/contracts/**")
+    assert any(l.startswith("tests/uses_call.py\tIMPORTS") for l in out.splitlines())
+    code, out, _ = run(capsys, "scope", "--db", built, "--no-tests", "src/contracts/**")
+    assert code == 0
+    assert not any(l.startswith(("tests/", "tests.")) for l in out.splitlines())
+    assert "src.handlers.h.view\tCALLS\tsrc.contracts.c.call\t6" in out
