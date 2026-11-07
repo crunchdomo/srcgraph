@@ -99,6 +99,8 @@ def test_dead_lists_unreached_symbols_only(built, capsys):
     assert "src.views.handler" not in names   # decorated: a framework registered it
     assert "src.views.Parser.handle_data" not in names   # overrides a method of an external base: the framework calls it
     assert "src.views.Parser.helper" not in names   # the graph cannot tell an override from a plain method there
+    assert "src.boom.by_name" not in names   # passed to apply() as a value
+    assert "src.views.Plain" not in names   # used in an annotation
 
 
 def test_hubs_ranks_by_fan_in_plus_fan_out(built, capsys):

@@ -209,3 +209,11 @@ def test_guard_does_not_leak_into_a_nested_definition():
     ex = _src("if cond:\n    def f():\n        g()\n    h()\n")
     guards = {r.name: r.guard for r in ex.refs if r.relation == "calls"}
     assert guards == {"g": "", "h": "if@1"}
+
+
+def test_bare_names_used_as_values_or_annotations_are_name_refs():
+    e = _src("def apply(fn, x):\n    return fn(x)\n\ndef g(y):\n    return y\n\napply(g, 1)\n"
+             "def h(a: Thing, n=g) -> Thing:\n    pass\n\napply(fn=g, x=2)\ncount = 0\n")
+    names = [(r.src_id, r.name) for r in e.refs if r.relation == "names"]
+    assert names == [("m.py", "g"), ("m.py::m.h", "Thing"), ("m.py::m.h", "g"), ("m.py::m.h", "Thing"), ("m.py", "g")]
+    # fn, x, y are parameters; count is being assigned; the keyword name fn is not a value

@@ -169,6 +169,12 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
                 amap = aliases.get(src_unit.id, {})
                 base = amap[head] if head in amap else f"{src_unit.name}.{head}"
                 qualified = f"{base}{dot}{rest}"
+                if ref.relation == "names":
+                    sid = by_qualified.get((lang, "", qualified))
+                    if sid is None:   # not a scanned symbol: a local, a builtin or an unknown; no node for it
+                        continue
+                    if symbols[sid].kind == "variable" and symbols[sid].path == src_unit.path:
+                        continue   # a module reading its own globals is not a wire worth drawing
                 if head not in amap and head in BUILTIN_NAMES and (lang, "", f"{src_unit.name}.{head}") not in by_qualified:
                     target = builtin(ref.name, lang)
                     res.edges.append(Edge(REF_RELATIONS[ref.relation], ref.src_id, target, line=ref.line, guard=ref.guard))

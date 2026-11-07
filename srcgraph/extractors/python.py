@@ -138,6 +138,10 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
             stack = classes if is_class else scopes
             stack.append(qualified if is_class else params(node))
             guards.append("")
+            for field in ("parameters", "return_type"):   # annotations and defaults name things; parameter names are local
+                part = node.child_by_field_name(field)
+                if part is not None and not is_class:
+                    walk(part, qualified, sym.id, is_class, not is_class)
             walk(body, qualified, sym.id, is_class, not is_class)
             guards.pop()
             stack.pop()
@@ -200,6 +204,12 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
                 if left is not None and left.type == "identifier":
                     scopes[-1].add(_text(left))
                 walk(child, scope, owner, in_class, in_function)
+            elif t == "identifier":
+                parent, name = child.parent, _text(child)
+                assigned = parent is not None and parent.type in ("assignment", "augmented_assignment", "keyword_argument") \
+                    and parent.child_by_field_name("left" if parent.type != "keyword_argument" else "name") == child
+                if not assigned and not is_local(name):
+                    ex.refs.append(RawRef(owner, name, lines.line(child.start_byte), "names"))
             elif t == "attribute":
                 name = _dotted(child)
                 if name and name.split(".", 1)[0] not in ("self", "cls") and not is_local(name):

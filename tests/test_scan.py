@@ -183,3 +183,10 @@ def test_hidden_dirs_are_excluded_by_default_and_name_globs_match_at_any_depth(t
     monkeypatch.chdir(tmp_path)
     assert [u.id for u in scan(["."]).units] == ["ok.py", "pkg/gen_z.py"]
     assert [u.id for u in scan(["."], excludes=(".*", "gen_*.py")).units] == ["ok.py"]
+
+
+def test_bare_name_references_resolve_or_vanish(repo):
+    e = {(d.label, d.src, d.dst) for d in repo.edges}
+    assert ("REFERENCES", "src/boom.py::src.boom.passer", "src/boom.py::src.boom.by_name") in e   # passed as a value
+    assert ("REFERENCES", "src/views.py::src.views.typed", "src/views.py::src.views.Plain") in e   # annotation
+    assert "unresolved::src.boom.err" not in {s.id for s in repo.symbols}   # an unknown bare name leaves no node
