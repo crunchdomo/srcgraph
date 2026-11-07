@@ -3,6 +3,7 @@ import builtins
 import os
 import posixpath
 import re
+import subprocess
 import sys
 import tomllib
 from dataclasses import replace
@@ -38,6 +39,15 @@ def _walk(roots: list[str], excludes: tuple[str, ...]) -> list[tuple[str, str]]:
 
     found = []
     for root in roots:
+        tracked = _git_files(root)
+        if tracked is not None:   # inside a git repo, git decides what is part of the project: .gitignore is honoured
+            for name in tracked:
+                full = os.path.join(root, name)
+                if os.path.splitext(name)[1] in EXTRACTORS and os.path.isfile(full) and not os.path.islink(full):
+                    rel = _rel(full)
+                    if not excluded(rel):
+                        found.append((root, rel))
+            continue
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = sorted(d for d in dirnames
                                  if not os.path.islink(os.path.join(dirpath, d)) and not excluded(_rel(os.path.join(dirpath, d))))
@@ -49,6 +59,16 @@ def _walk(roots: list[str], excludes: tuple[str, ...]) -> list[tuple[str, str]]:
                 if not excluded(rel):
                     found.append((root, rel))
     return found
+
+
+def _git_files(root: str) -> list[str] | None:
+    """Tracked plus untracked-but-not-ignored files under root, sorted, relative to root; None outside a git repo."""
+    try:
+        out = subprocess.run(["git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+                             capture_output=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return sorted(os.fsdecode(p) for p in out.split(b"\0") if p)
 
 
 def _absolute(imp: RawImport, importer: Unit) -> str:
