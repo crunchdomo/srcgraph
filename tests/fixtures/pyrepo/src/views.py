@@ -29,3 +29,12 @@ class Dyn(make_base()):
 class Repr:
     def __repr__(self):
         return "r"
+
+import html.parser
+
+class Parser(html.parser.HTMLParser):
+    def handle_data(self, data):
+        pass
+
+    def helper(self):
+        pass
