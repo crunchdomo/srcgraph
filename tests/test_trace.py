@@ -44,3 +44,21 @@ def test_trace_shortens_values(built, capsys):
     assert out.splitlines()[0] == "src.boom.echo(x='" + "a" * 58 + "…)"
     _, out, _ = run(capsys, "trace", "--db", built, "src.boom.echo(src.boom.Grid())")
     assert out.splitlines()[0] == "src.boom.echo(x=Grid(3×4))"
+
+
+def test_trace_runs_a_pytest_node_id_with_the_test_at_the_root(built, capsys):
+    code, out, _ = run(capsys, "trace", "--db", built, "tests/uses_call.py::test_call")
+    assert code == 0, out
+    lines = out.splitlines()
+    assert lines[0] == "tests.uses_call.test_call()"
+    assert lines[1] == "  src.contracts.c.call(req=1)"
+    assert lines[3] == "      src.gateway.client.post()"
+    assert lines[-1].startswith("  = None  (")   # no root line: pytest owns the result
+
+
+def test_trace_of_a_failing_test_shows_the_assertion_and_exits_1(built, capsys):
+    code, out, _ = run(capsys, "trace", "--db", built, "tests/uses_call.py::test_fails")
+    assert code == 1
+    lines = out.splitlines()
+    assert lines[0] == "tests.uses_call.test_fails()"
+    assert lines[-1].startswith("  ! AssertionError")

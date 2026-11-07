@@ -81,7 +81,7 @@ def _parser() -> argparse.ArgumentParser:
     ro(sub.add_parser("scope", help="one compartment: its doc line, internal wiring, outbound and inbound wires"),
        "glob", "path glob for the compartment, e.g. 'src/gui/**'")
     ro(sub.add_parser("trace", help="run an expression in the interpreter on PATH and print the calls it makes through the graph"),
-       "expr", "python expression, e.g. 'pkg.mod.f(1)'; activate the target's venv first")
+       "expr", "python expression, e.g. 'pkg.mod.f(1)', or a pytest node id like tests/test_x.py::test_y; activate the target's venv first")
     return p
 
 
