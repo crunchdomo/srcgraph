@@ -38,3 +38,5 @@ class Parser(html.parser.HTMLParser):
 
     def helper(self):
         pass
+def typed(p: Plain) -> Plain:
+    return p
