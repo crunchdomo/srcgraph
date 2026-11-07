@@ -31,7 +31,7 @@ def short(value) -> str:
 
 
 def main(table_path: str, events_path: str, expr: str) -> int:
-    table = json.load(open(table_path))   # abs file -> name -> [[def line, qualified], ...] sorted by line
+    table = json.load(open(table_path))   # abs file -> name -> [[def line, qualified, symbol id], ...] sorted by line
     events = open(events_path, "w")   # closed in the finally: the traceback cycle can keep it unflushed at exit
     known: dict = {}   # code object -> qualified or None
     raised: set = set()   # ids of frames unwinding with an exception
@@ -44,7 +44,7 @@ def main(table_path: str, events_path: str, expr: str) -> int:
         if code not in known:
             names = table.get(os.path.abspath(code.co_filename), {}).get(code.co_name) or []
             # a decorated def's co_firstlineno is the first decorator line, so take the first def at or after it
-            known[code] = next((q for line, q in names if line >= code.co_firstlineno), None)
+            known[code] = next(((q, i) for line, q, i in names if line >= code.co_firstlineno), None)
         return known[code]
 
     def depth(frame) -> int:
@@ -71,7 +71,8 @@ def main(table_path: str, events_path: str, expr: str) -> int:
             return None
         code = frame.f_code
         names = code.co_varnames[: code.co_argcount + code.co_kwonlyargcount]
-        emit(ev="call", sym=resolve(code), depth=depth(frame), args={n: short(frame.f_locals[n]) for n in names if n in frame.f_locals})
+        sym, sid = resolve(code)
+        emit(ev="call", sym=sym, id=sid, depth=depth(frame), args={n: short(frame.f_locals[n]) for n in names if n in frame.f_locals})
         started[id(frame)] = perf_counter()
         return local
 

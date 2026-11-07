@@ -62,3 +62,14 @@ def test_trace_of_a_failing_test_shows_the_assertion_and_exits_1(built, capsys):
     lines = out.splitlines()
     assert lines[0] == "tests.uses_call.test_fails()"
     assert lines[-1].startswith("  ! AssertionError")
+
+
+def test_trace_saves_events_with_symbol_ids_next_to_the_db(built, capsys):
+    import glob, json, os
+    run(capsys, "trace", "--db", built, "src.handlers.h.view(1)")
+    files = glob.glob(os.path.join(os.path.dirname(built), "traces", "*.json"))
+    assert len(files) == 1
+    saved = json.load(open(files[0]))
+    assert saved["input"] == "src.handlers.h.view(1)"
+    calls = [e for e in saved["events"] if e["ev"] == "call"]
+    assert calls[0]["id"] == "src/handlers/h.py::src.handlers.h.view"

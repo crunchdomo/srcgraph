@@ -15,7 +15,7 @@ input[type=search]{width:100%;padding:6px;border:1px solid var(--line);border-ra
 ul{list-style:none;margin:8px 0;padding:0}li{padding:3px 4px;cursor:pointer;border-radius:3px;word-break:break-all}li:hover{background:var(--line)}
 .lbl{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px}
 svg{width:100%;height:100%;display:block}.node circle{stroke:var(--bg);stroke-width:1.5px;cursor:pointer}.node.bad circle{stroke:var(--bad);stroke-width:3px}
-.node.sel circle{stroke:var(--accent);stroke-width:3px}.node text{font-size:10px;pointer-events:none;fill:var(--fg)}
+.node.sel circle{stroke:var(--accent);stroke-width:3px}.node.run circle{stroke:var(--accent);stroke-width:3px}.node.dim,.link.dim{opacity:.2}.link.run line{stroke:var(--accent);stroke-opacity:1;stroke-width:2px}.node text{font-size:10px;pointer-events:none;fill:var(--fg)}
 .link{stroke:var(--muted);stroke-opacity:.6}.link text{font-size:9px;fill:var(--muted)}
 h3{margin:12px 0 4px;font-size:12px;text-transform:uppercase;color:var(--muted)}table{border-collapse:collapse;width:100%}td{padding:2px 4px;vertical-align:top;word-break:break-all}td:first-child{color:var(--muted);white-space:nowrap}
 pre{background:var(--bg);border:1px solid var(--line);padding:6px;overflow:auto;font-size:11px;margin:4px 0}mark{background:#fde2e2;color:#222}
@@ -31,6 +31,7 @@ label.f{display:inline-block;margin:0 6px 4px 0;font-size:11px}
   <ul id="results"></ul>
   <h3>edges</h3><div id="filters"></div>
   <div id="overlay" hidden><h3>findings</h3><ul id="findings"></ul></div>
+  <div id="runs" hidden><h3>traces <button id="clearrun">clear</button></h3><ul id="tracelist"></ul><ol id="steps"></ol></div>
 </aside>
 <main><svg id="canvas"></svg></main>
 <aside id="detail"><p style="color:var(--muted)">Search, then click a result. Double-click a node to expand it.</p></aside>
@@ -39,6 +40,7 @@ label.f{display:inline-block;margin:0 6px 4px 0;font-size:11px}
 const api = async (path) => { const r = await fetch(path); if (!r.ok) throw new Error((await r.json()).error || r.status); return r.json(); };
 const colour = l => getComputedStyle(document.documentElement).getPropertyValue('--' + l).trim() || '#888';
 const nodes = new Map(), links = new Map(), hidden = new Set(), bad = new Map();  // bad: node id -> findings
+const run = new Set(), runEdges = new Set();  // the trace shown on the map: node ids and src|RAN|dst keys
 let selected = null, findings = [];
 
 // ---- canvas
@@ -69,7 +71,10 @@ function draw() {
   ne.append('text').attr('dx', 9).attr('dy', 3).text(d => d.name || d.kind || d.id);
   ne.on('click', (e, d) => select(d.id)).on('dblclick', (e, d) => { e.stopPropagation(); expand(d.id); });
   node.exit().remove();
-  nodeG.selectAll('g.node').classed('bad', d => bad.has(d.id)).classed('sel', d => d.id === selected);
+  nodeG.selectAll('g.node').classed('bad', d => bad.has(d.id)).classed('sel', d => d.id === selected)
+    .classed('run', d => run.has(d.id)).classed('dim', d => run.size > 0 && !run.has(d.id));
+  linkG.selectAll('g.link').classed('run', l => runEdges.has(`${l.src}|${l.label}|${l.dst}`))
+    .classed('dim', l => run.size > 0 && !runEdges.has(`${l.src}|${l.label}|${l.dst}`));
   sim.nodes(ns); sim.force('link').links(ls); sim.alpha(.6).restart();
 }
 function addFilter(label) {
@@ -131,6 +136,28 @@ async function search(q) {
   const ul = document.getElementById('findings');
   ul.innerHTML = findings.filter(t => t.finding.node_id).map(t => { const f = t.finding; return `<li data-id="${esc(f.node_id)}"><span class="sev ${esc(f.severity)}">${esc(f.severity)}</span> ${esc(f.path)}:${f.line}<br><span style="color:var(--muted)">${esc(f.decision)}/${esc(f.rule)}</span></li>`; }).join('');
   ul.querySelectorAll('li').forEach(li => li.onclick = () => select(li.dataset.id));
+})();
+
+// ---- traces (srcgraph trace): saved runs drawn as a route on the map
+async function showTrace(file) {
+  const t = await api(`/api/trace?file=${encodeURIComponent(file)}`);
+  run.clear(); runEdges.clear();
+  t.nodes.forEach(n => run.add(n.id)); t.edges.forEach(e => runEdges.add(`${e.src}|RAN|${e.dst}`));
+  merge({nodes: t.nodes, edges: t.edges});
+  const name = id => (nodes.get(id) || {}).name || id;
+  const steps = [];  // consecutive repeats collapse to one step with a count, as the CLI does
+  for (const id of t.order) { const last = steps[steps.length - 1]; if (last && last.id === id) last.n++; else steps.push({id, n: 1}); }
+  document.getElementById('steps').innerHTML = steps.map(s => `<li data-id="${esc(s.id)}">${esc(name(s.id))}${s.n > 1 ? ` <span style="color:var(--muted)">× ${s.n}</span>` : ''}</li>`).join('');
+  document.querySelectorAll('#steps li').forEach(li => li.onclick = () => select(li.dataset.id));
+}
+(async () => {
+  let runs; try { runs = await api('/api/traces'); } catch (e) { return; }
+  if (!runs.length) return;
+  document.getElementById('runs').hidden = false;
+  const ul = document.getElementById('tracelist');
+  ul.innerHTML = runs.map(r => `<li data-file="${esc(r.file)}">${esc(r.input)} <span style="color:var(--muted)">${r.calls} calls · ${esc(r.at || '')}</span></li>`).join('');
+  ul.querySelectorAll('li').forEach(li => li.onclick = () => showTrace(li.dataset.file));
+  document.getElementById('clearrun').onclick = () => { run.clear(); runEdges.clear(); document.getElementById('steps').innerHTML = ''; draw(); };
 })();
 </script>
 </body>
