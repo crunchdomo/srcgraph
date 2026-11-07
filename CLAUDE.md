@@ -17,7 +17,7 @@ Source code in, a queryable two-tier knowledge graph out. The engine under adrgr
 - After changing this package, adrgraph's venv needs `pip install ~/Documents/srcgraph` (non-editable)
   and then `rm -rf ~/Documents/srcgraph/build`.
 - Self-check: `adrgraph check --exclude tests/fixtures` (adrgraph installed as a dev tool).
-- Acceptance against a real repo: `SRCGRAPH_ACCEPT_REPO=~/Documents/f1-race-replay pytest tests/test_acceptance.py`.
+- Acceptance against real repos (colon-separated): `SRCGRAPH_ACCEPT_REPO=~/Documents/f1-race-replay:~/Documents/adr-as-code:~/Documents/kg-wiki:~/Documents/jobapps pytest tests/test_acceptance.py`.
   Skipped when the variable is unset. The unresolved-call ceiling in that file is lowered as the call-graph tickets land.
 
 ## Agent skills

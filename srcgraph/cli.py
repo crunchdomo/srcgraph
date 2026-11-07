@@ -27,8 +27,13 @@ PRESETS = {
                 "RETURN coalesce(c.qualified, c.path) AS caller, r.line AS line, s.qualified AS target ORDER BY caller, line"),
     "dead": ("symbols nothing calls, references, inherits or decorates, and that are not entry points (candidates: "
              "getattr and registries are invisible)", "nothing is dead",
-             "MATCH (s:Symbol) WHERE s.kind IN ['function', 'method', 'class'] AND NOT s.entry AND NOT s.name STARTS WITH '__' "
+             # a method whose name is accessed on anything anywhere (an x.name attribute in the syntax tier) is not
+             # dead: the graph has no types, so that is the best it can say
+             "MATCH (u:Unit)-[:CONTAINS*1..3]->(s:Symbol) WHERE NOT u.test AND s.kind IN ['function', 'method', 'class'] "
+             "AND NOT s.entry AND NOT s.name STARTS WITH '__' "
              "OPTIONAL MATCH ()-[r:CALLS|REFERENCES|INHERITS|DECORATES]->(s) WITH s, count(r) AS n WHERE n = 0 "
+             "OPTIONAL MATCH (x:Ast {norm: 'Attribute'}) WHERE s.kind = 'method' AND ends_with(x.text, concat('.', s.name)) "
+             "WITH s, count(x) AS m WHERE m = 0 "
              "RETURN s.qualified AS symbol, s.path AS path, s.line AS line ORDER BY path, line"),
     "hubs": ("symbols and units with the most wires in and out: what you must not break, and what does too much",
              "no wires at all",
@@ -40,7 +45,7 @@ PRESETS = {
     "untested": ("symbols no test unit reaches through calls (up to six hops)", "everything is reached from a test",
                  # ponytail: 6-hop expansion from every test unit; precompute a reached set if a big repo makes this slow
                  "MATCH (u:Unit)-[:CONTAINS*1..3]->(s:Symbol) WHERE NOT u.test AND s.kind IN ['function', 'method', 'class'] "
-                 "OPTIONAL MATCH (t:Unit {test: true})-[:CONTAINS|CALLS*1..6]->(s) WITH s, count(t) AS n WHERE n = 0 "
+                 "OPTIONAL MATCH (t:Unit {test: true})-[:CONTAINS*1..2]->(:Symbol)-[:CALLS*1..6]->(s) WITH s, count(t) AS n WHERE n = 0 "
                  "RETURN s.qualified AS symbol, s.path AS path, s.line AS line ORDER BY path, line"),
 }
 

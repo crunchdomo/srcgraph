@@ -174,3 +174,12 @@ def test_units_under_a_tests_directory_are_flagged(entry_repo):
 def test_entry_points_from_main_guard_console_script_and_tests(entry_repo):
     entry = {s.name: s.entry for s in entry_repo.symbols if s.kind in ("function", "method")}
     assert entry == {"main": True, "entry": True, "helper": True, "run": False, "unused": False, "test_h": False}
+
+
+def test_hidden_dirs_are_excluded_by_default_and_name_globs_match_at_any_depth(tmp_path, monkeypatch):
+    for p in (".claude/w/x.py", "pkg/.cache/y.py", "pkg/gen_z.py", "ok.py"):
+        (tmp_path / p).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / p).write_text("x = 1\n")
+    monkeypatch.chdir(tmp_path)
+    assert [u.id for u in scan(["."]).units] == ["ok.py", "pkg/gen_z.py"]
+    assert [u.id for u in scan(["."], excludes=(".*", "gen_*.py")).units] == ["ok.py"]

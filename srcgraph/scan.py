@@ -11,7 +11,7 @@ from srcgraph.model import REF_RELATIONS, Edge, Extraction, RawImport, Symbol, U
 from srcgraph.selectors import glob_to_regex
 
 BUILTIN_NAMES = frozenset(dir(builtins))
-DEFAULT_EXCLUDES = (".git", ".venv", "venv", "node_modules", ".terraform", ".adrgraph", ".srcgraph", "__pycache__")
+DEFAULT_EXCLUDES = (".*", "venv", "node_modules", "__pycache__")   # .* covers .git, .venv, .claude, .srcgraph, ...
 
 
 def module_name(root: str, rel_to_root: str) -> str:
@@ -26,14 +26,15 @@ def _rel(path: str) -> str:
 
 def _walk(roots: list[str], excludes: tuple[str, ...]) -> list[tuple[str, str]]:
     """Yield (root, rel_path_from_cwd) for every file with a registered extractor."""
-    names = {e for e in excludes if "/" not in e and not any(c in e for c in "*?")}
-    globs = [re.compile(glob_to_regex(e.rstrip("/"))) for e in excludes if e not in names]
+    # an exclude without "/" matches one path component at any depth; with "/" it matches the path from the root
+    names = [re.compile(glob_to_regex(e)) for e in excludes if "/" not in e]
+    paths = [re.compile(glob_to_regex(e.rstrip("/"))) for e in excludes if "/" in e]
 
     def excluded(rel: str) -> bool:
         parts = rel.split("/")
-        if any(p in names for p in parts):
+        if any(g.fullmatch(p) for p in parts if p not in (".", "..") for g in names):
             return True
-        return any(g.fullmatch("/".join(parts[:i])) for i in range(1, len(parts) + 1) for g in globs)
+        return any(g.fullmatch("/".join(parts[:i])) for i in range(1, len(parts) + 1) for g in paths)
 
     found = []
     for root in roots:
