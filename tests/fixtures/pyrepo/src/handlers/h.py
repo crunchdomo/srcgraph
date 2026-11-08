@@ -10,3 +10,6 @@ def leak():
     db_run()
 
 c.warm()
+
+def dispatch(name):
+    return getattr(c, name)()

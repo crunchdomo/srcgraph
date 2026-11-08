@@ -76,8 +76,10 @@ class RawImport:
     alias: str | None = None
 
 
-REF_RELATIONS = {"calls": "CALLS", "references": "REFERENCES", "names": "REFERENCES", "inherits": "INHERITS", "decorates": "DECORATES"}
-# "names" is a bare identifier used as a value or annotation; the scanner keeps it only when it resolves to a scanned symbol
+REF_RELATIONS = {"calls": "CALLS", "references": "REFERENCES", "names": "REFERENCES", "reads": "REFERENCES",
+                 "inherits": "INHERITS", "decorates": "DECORATES"}
+# "names" is a bare identifier used as a value or annotation; the scanner keeps it only when it resolves to a scanned symbol.
+# "reads" is the first argument of getattr(X, ...): X is a registry read by name; kept only when it is a scanned module.
 
 
 @dataclass(frozen=True)

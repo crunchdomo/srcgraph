@@ -185,3 +185,9 @@ def test_domains_json_bad_spec_and_no_match(built, capsys):
     assert code == 2 and "name=glob" in err
     code, out, err = run(capsys, "domains", "--db", built, "x=nowhere/**")
     assert code == 1 and out == "" and "no wires cross" in err
+
+
+def test_dead_spares_public_functions_of_a_module_read_through_getattr(built, capsys):
+    _, out, _ = run(capsys, "dead", "--db", built)
+    names = {line.split("\t")[0] for line in out.splitlines()[1:]}
+    assert "src.contracts.c.plug" not in names and "src.contracts.c._hidden" in names
