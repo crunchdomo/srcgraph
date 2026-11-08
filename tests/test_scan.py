@@ -250,3 +250,10 @@ def test_from_package_import_follows_the_init_reexport(repo):
     e = {(d.label, d.src, d.dst) for d in repo.edges}
     assert ("CALLS", "tests/uses_call.py::tests.uses_call.test_call", "src/contracts/c.py::src.contracts.c.warm") in e
     assert "unresolved::src.contracts.warm" not in {s.id for s in repo.symbols}
+
+
+def test_type_checking_imports_and_their_annotations_carry_the_typing_guard(repo):
+    g = {(d.label, d.src, d.dst): d.guard for d in repo.edges}
+    assert g[("IMPORTS", "src/other/typed.py", "src/contracts/c.py")] == "typing"
+    assert g[("REFERENCES", "src/other/typed.py::src.other.typed.take", "src/contracts/c.py::src.contracts.c.Contract")] == "typing"
+    assert g[("IMPORTS", "src/handlers/h.py", "src/contracts/c.py")] == ""

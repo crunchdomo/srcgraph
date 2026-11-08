@@ -198,3 +198,15 @@ def test_callers_matches_a_dotted_suffix_of_the_qualified_name(built, capsys):
     _, full, _ = run(capsys, "callers", "--db", built, "src.contracts.c.call")
     code, out, _ = run(capsys, "callers", "--db", built, "c.call")
     assert code == 0 and out == full and "src.handlers.h.view\t" in out
+
+
+def test_scope_and_domains_can_hide_typing_only_wires(built, capsys):
+    _, out, _ = run(capsys, "scope", "--db", built, "src/other/**")
+    assert "src/other/typed.py\tIMPORTS\tsrc.contracts.c\t5\ttyping" in out
+    assert "src.other.typed.take\tREFERENCES\tsrc.contracts.c.Contract\t8\ttyping" in out
+    code, out, _ = run(capsys, "scope", "--db", built, "--no-typing", "src/other/**")
+    assert code == 0 and "\ttyping\n" not in out and "src/other/typed.py\t" in out   # the `typing` module import stays
+    _, out, _ = run(capsys, "domains", "--db", built, "other=src/other/**", "contracts=src/contracts/**")
+    assert "other\tcontracts\tsrc/other/typed.py\tIMPORTS\tsrc.contracts.c\t5" in out
+    code, out, err = run(capsys, "domains", "--db", built, "--no-typing", "other=src/other/**", "contracts=src/contracts/**")
+    assert code == 1 and "no wires cross" in out + err

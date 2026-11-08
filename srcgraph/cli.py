@@ -98,7 +98,9 @@ def _parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("scope", help="one compartment: its files with doc lines, internal wiring, outbound and inbound wires")
     ro(sp, "glob", "path glob for the compartment, e.g. 'src/gui/**'")
     sp.add_argument("--no-tests", action="store_true", help="hide wires that touch a test unit")
+    sp.add_argument("--no-typing", action="store_true", help="hide imports and annotations made under if TYPE_CHECKING")
     sp = sub.add_parser("domains", help="wires rolled up between named groups of paths, and every edge that crosses between them")
+    sp.add_argument("--no-typing", action="store_true", help="hide imports and annotations made under if TYPE_CHECKING")
     ro(sp)
     sp.add_argument("spec", nargs="+", help="name=glob, e.g. billing='src/billing/**'")
     ro(sub.add_parser("trace", help="run an expression in the interpreter on PATH and print the calls it makes through the graph"),
@@ -106,7 +108,7 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
-def scope(graph: Graph, glob: str, no_tests: bool = False) -> dict[str, list[dict]]:
+def scope(graph: Graph, glob: str, no_tests: bool = False, no_typing: bool = False) -> dict[str, list[dict]]:
     """What happens inside one compartment and what crosses its boundary; every section empty when nothing matches."""
     a, pa = compile_selector({"path": glob}, "a", "a")
     b, pb = compile_selector({"path": glob}, "b", "b")
@@ -114,6 +116,7 @@ def scope(graph: Graph, glob: str, no_tests: bool = False) -> dict[str, list[dic
     # a symbol's unit is the Unit with its path; --no-tests drops wires with a test unit at either end
     tests = ", (ua:Unit), (ub:Unit)" if no_tests else ""
     not_tests = " AND ua.path = a.path AND ub.path = b.path AND NOT ua.test AND NOT ub.test" if no_tests else ""
+    not_tests += NOT_TYPING if no_typing else ""
 
     def edges(where: str) -> list[dict]:
         # unresolved and builtin targets are not wires that land anywhere worth drawing
@@ -130,7 +133,10 @@ def scope(graph: Graph, glob: str, no_tests: bool = False) -> dict[str, list[dic
     }
 
 
-def domains(graph: Graph, mapping: dict[str, str]) -> dict[str, list[dict]]:
+NOT_TYPING = " AND coalesce(r.guard, '') <> 'typing'"   # imports and annotations under `if TYPE_CHECKING`
+
+
+def domains(graph: Graph, mapping: dict[str, str], no_typing: bool = False) -> dict[str, list[dict]]:
     """Wires rolled up between named groups of paths, plus every edge that crosses from one group to another.
     A path matching no group is ignored. Returns {"matrix", "crossings"}."""
     groups = [(name, re.compile(glob_to_regex(glob))) for name, glob in mapping.items()]
@@ -139,7 +145,7 @@ def domains(graph: Graph, mapping: dict[str, str]) -> dict[str, list[dict]]:
         return next((n for n, g in groups if path and g.fullmatch(path)), None)
 
     # ponytail: one query for every wire, classified in Python; a per-pair Cypher count if a graph makes this slow
-    rows = graph.query(f"MATCH (a)-[r:{WIRES}]->(b) WHERE label(a) <> 'Ast' AND NOT b.kind IN ['unresolved', 'builtin'] "
+    rows = graph.query(f"MATCH (a)-[r:{WIRES}]->(b) WHERE label(a) <> 'Ast' AND NOT b.kind IN ['unresolved', 'builtin']{NOT_TYPING if no_typing else ''} "
                        "RETURN a.path AS ap, coalesce(a.qualified, a.path) AS source, label(r) AS label, "
                        "b.path AS bp, coalesce(b.qualified, b.name) AS target, r.line AS line")
     crossings = sorted(({"from": fa, "to": fb, "source": r["source"], "label": r["label"], "target": r["target"], "line": r["line"]}
@@ -239,7 +245,7 @@ def _run(args, out, err) -> int:
         return 0
     if args.command == "scope":
         with Graph.open(args.db) as graph:
-            sections = scope(graph, args.glob, args.no_tests)
+            sections = scope(graph, args.glob, args.no_tests, args.no_typing)
         if not any(sections.values()):
             print(f"nothing matches {args.glob}", file=err)
             return 1
@@ -256,7 +262,7 @@ def _run(args, out, err) -> int:
             print("error: domains take name=glob pairs", file=err)
             return 2
         with Graph.open(args.db) as graph:
-            sections = domains(graph, dict(s.split("=", 1) for s in args.spec))
+            sections = domains(graph, dict(s.split("=", 1) for s in args.spec), args.no_typing)
         if not sections["crossings"]:
             print("no wires cross between those domains", file=err)
             return 1

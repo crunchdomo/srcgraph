@@ -44,7 +44,8 @@ class Edge:
     src: str
     dst: str
     line: int = 0
-    guard: str = ""   # CALLS only: nearest enclosing if/for/while/try as kind@line, "" when unconditional
+    guard: str = ""   # CALLS, IMPORTS, REFERENCES: nearest enclosing if/for/while/try as kind@line, "typing" under
+                      # `if TYPE_CHECKING`, "" when unconditional
 
 
 @dataclass(frozen=True)
@@ -74,6 +75,7 @@ class RawImport:
     line: int
     names: tuple[tuple[str, str], ...] = ()
     alias: str | None = None
+    guard: str = ""   # as on Edge; "typing" when the import sits under `if TYPE_CHECKING`
 
 
 REF_RELATIONS = {"calls": "CALLS", "references": "REFERENCES", "names": "REFERENCES", "reads": "REFERENCES",
