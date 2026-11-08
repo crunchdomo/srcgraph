@@ -192,3 +192,9 @@ def test_dead_spares_public_functions_of_a_module_read_through_getattr(built, ca
     _, out, _ = run(capsys, "dead", "--db", built)
     names = {line.split("\t")[0] for line in out.splitlines()[1:]}
     assert "src.contracts.c.plug" not in names and "src.contracts.c._hidden" in names
+
+
+def test_callers_matches_a_dotted_suffix_of_the_qualified_name(built, capsys):
+    _, full, _ = run(capsys, "callers", "--db", built, "src.contracts.c.call")
+    code, out, _ = run(capsys, "callers", "--db", built, "c.call")
+    assert code == 0 and out == full and "src.handlers.h.view\t" in out

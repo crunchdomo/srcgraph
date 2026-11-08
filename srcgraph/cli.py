@@ -25,8 +25,9 @@ PRESETS = {
     "importers": ("units that import a module or any of its submodules", "no importers of {}",
                   "MATCH (u:Unit)-[i:IMPORTS]->(v:Unit) WHERE v.name = $name OR v.name STARTS WITH $prefix "
                   "RETURN u.path AS importer, i.line AS line, v.name AS module ORDER BY importer, line"),
-    "callers": ("symbols and units that call a symbol, by name or qualified name", "no callers of {}",
-                "MATCH (c)-[r:CALLS]->(s:Symbol) WHERE s.name = $name OR s.qualified = $name "
+    "callers": ("symbols and units that call a symbol, by name, qualified name or a dotted suffix (Session.request)",
+                "no callers of {}",
+                "MATCH (c)-[r:CALLS]->(s:Symbol) WHERE s.name = $name OR s.qualified = $name OR s.qualified ENDS WITH concat('.', $name) "
                 "RETURN coalesce(c.qualified, c.path) AS caller, r.line AS line, s.qualified AS target, r.guard AS guard ORDER BY caller, line"),
     "dead": ("symbols nothing calls, references, inherits or decorates, and that are not entry points (candidates: "
              "getattr and registries are invisible)", "nothing is dead",
