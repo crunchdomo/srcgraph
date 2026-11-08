@@ -235,3 +235,11 @@ def test_getattr_on_a_module_references_the_unit(repo):
     assert any(e.label == "REFERENCES" and e.src == "src/handlers/h.py::src.handlers.h.dispatch" and e.dst == "src/contracts/c.py"
                for e in repo.edges)
     assert not any(s.kind == "unresolved" and s.name.endswith(".c") for s in repo.symbols)
+
+def test_a_file_under_two_roots_is_scanned_once_under_the_most_specific(tmp_path, monkeypatch):
+    monkeypatch.chdir("tests/fixtures/pyrepo")
+    repo = scan(["src", "."])
+    ids = [u.id for u in repo.units]
+    assert len(ids) == len(set(ids))
+    names = {u.path: u.name for u in repo.units}
+    assert names["src/contracts/c.py"] == "contracts.c" and names["tests/uses_call.py"] == "tests.uses_call"

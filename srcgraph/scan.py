@@ -49,7 +49,12 @@ def _walk(roots: list[str], excludes: tuple[str, ...]) -> list[tuple[str, str]]:
         for full in (os.path.join(root, n) for n in tracked) if tracked is not None else walk(root):
             if os.path.splitext(full)[1] in EXTRACTORS and os.path.isfile(full) and not os.path.islink(full) and not excluded(_rel(full)):
                 found.append((root, _rel(full)))
-    return found
+    # a file under two roots (--src src --src .) belongs to the most specific one, and is scanned once
+    best: dict[str, str] = {}
+    for root, rel in found:
+        if rel not in best or len(root) > len(best[rel]):
+            best[rel] = root
+    return sorted((root, rel) for rel, root in best.items())
 
 
 def _git_files(root: str) -> list[str] | None:
