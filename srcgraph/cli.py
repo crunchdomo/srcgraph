@@ -133,9 +133,9 @@ def scope(graph: Graph, glob: str, no_tests: bool = False) -> tuple[int, dict[st
     }
 
 
-def domains(graph: Graph, mapping: dict[str, str]) -> tuple[int, dict[str, list[dict]]]:
+def domains(graph: Graph, mapping: dict[str, str]) -> dict[str, list[dict]]:
     """Wires rolled up between named groups of paths, plus every edge that crosses from one group to another.
-    A path matching no group is ignored. Returns (units in some group, {"matrix", "crossings"})."""
+    A path matching no group is ignored. Returns {"matrix", "crossings"}."""
     groups = [(name, re.compile(glob_to_regex(glob))) for name, glob in mapping.items()]
 
     def group(path: str | None) -> str | None:
@@ -145,12 +145,11 @@ def domains(graph: Graph, mapping: dict[str, str]) -> tuple[int, dict[str, list[
     rows = graph.query(f"MATCH (a)-[r:{WIRES}]->(b) WHERE label(a) <> 'Ast' AND NOT b.kind IN ['unresolved', 'builtin'] "
                        "RETURN a.path AS ap, coalesce(a.qualified, a.path) AS source, label(r) AS label, "
                        "b.path AS bp, coalesce(b.qualified, b.name) AS target, r.line AS line")
-    matched = sum(group(r["path"]) is not None for r in graph.query("MATCH (u:Unit) RETURN u.path AS path"))
     crossings = sorted(({"from": fa, "to": fb, "source": r["source"], "label": r["label"], "target": r["target"], "line": r["line"]}
                         for r in rows if (fa := group(r["ap"])) and (fb := group(r["bp"])) and fa != fb),
                        key=lambda c: (c["from"], c["to"], c["source"], c["line"] or 0))
     matrix = [{"from": f, "to": t, "edges": n} for (f, t), n in Counter((c["from"], c["to"]) for c in crossings).most_common()]
-    return matched, {"matrix": matrix, "crossings": crossings}
+    return {"matrix": matrix, "crossings": crossings}
 
 
 def traces_dir(db: str) -> str:
@@ -260,9 +259,9 @@ def _run(args, out, err) -> int:
             print("error: domains take name=glob pairs", file=err)
             return 2
         with Graph.open(args.db) as graph:
-            matched, sections = domains(graph, dict(s.split("=", 1) for s in args.spec))
-        if not matched:
-            print("no domain matches any unit", file=err)
+            sections = domains(graph, dict(s.split("=", 1) for s in args.spec))
+        if not sections["crossings"]:
+            print("no wires cross between those domains", file=err)
             return 1
         if args.format == "json":
             return _print(sections, "json", out)

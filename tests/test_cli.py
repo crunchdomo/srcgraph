@@ -184,4 +184,4 @@ def test_domains_json_bad_spec_and_no_match(built, capsys):
     code, _, err = run(capsys, "domains", "--db", built, "nothing/**")
     assert code == 2 and "name=glob" in err
     code, out, err = run(capsys, "domains", "--db", built, "x=nowhere/**")
-    assert code == 1 and out == "" and "no domain matches" in err
+    assert code == 1 and out == "" and "no wires cross" in err

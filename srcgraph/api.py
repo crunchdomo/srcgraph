@@ -23,7 +23,7 @@ class Repo:
         return _scope(self.graph, glob, no_tests)[1]
 
     def domains(self, mapping: dict[str, str]) -> dict[str, list[dict]]:
-        return _domains(self.graph, mapping)[1]
+        return _domains(self.graph, mapping)
 
     def trace(self, expr: str) -> list[dict]:
         with contextlib.chdir(self.root):   # symbol paths are relative to the root; the tracer imports from cwd
