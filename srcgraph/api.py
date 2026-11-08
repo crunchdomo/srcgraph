@@ -3,7 +3,7 @@ import contextlib
 import os
 import sys
 
-from srcgraph.cli import DB, PRESETS, build, domains as _domains, scope as _scope, trace as _trace
+from srcgraph.cli import DB, PRESETS, build, domains as _domains, impact as _impact, scope as _scope, trace as _trace
 from srcgraph.graph import Graph
 from srcgraph.scan import DEFAULT_EXCLUDES
 
@@ -24,6 +24,10 @@ class Repo:
 
     def domains(self, mapping: dict[str, str], no_typing: bool = False) -> dict[str, list[dict]]:
         return _domains(self.graph, mapping, no_typing)
+
+    def impact(self, rev: str, hops: int = 2) -> dict[str, list[dict]]:
+        with contextlib.chdir(self.root):   # the diff's paths are relative to the root, like the graph's
+            return _impact(self.graph, rev, hops)
 
     def trace(self, expr: str) -> list[dict]:
         with contextlib.chdir(self.root):   # symbol paths are relative to the root; the tracer imports from cwd

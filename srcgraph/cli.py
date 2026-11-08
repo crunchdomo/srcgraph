@@ -85,7 +85,7 @@ def _parser() -> argparse.ArgumentParser:
 
     def ro(sp, positional=None, help_=None):
         sp.add_argument("--db", default=DB)
-        sp.add_argument("--format", choices=["text", "json"], default="text")
+        sp.add_argument("--format", choices=["text", "json", "md"], default="text")
         if positional:
             sp.add_argument(positional, help=help_)
 
@@ -107,6 +107,9 @@ def _parser() -> argparse.ArgumentParser:
     sp.add_argument("--no-typing", action="store_true", help="hide imports and annotations made under if TYPE_CHECKING")
     ro(sp)
     sp.add_argument("spec", nargs="+", help="name=glob, e.g. billing='src/billing/**'")
+    sp = sub.add_parser("impact", help="what a change reaches: the symbols a git diff touches, what reaches them, and the tests that cover them")
+    ro(sp, "rev", "git revision or range: HEAD (the working tree against it), origin/main...HEAD (a branch)")
+    sp.add_argument("--hops", type=int, default=2, help="how far out to follow inbound wires (default 2)")
     ro(sub.add_parser("trace", help="run an expression in the interpreter on PATH and print the calls it makes through the graph"),
        "expr", "python expression, e.g. 'pkg.mod.f(1)', or a pytest node id like tests/test_x.py::test_y; activate the target's venv first")
     return p
@@ -235,10 +238,60 @@ def _print(rows, fmt: str, out) -> int:
         print(json.dumps(rows, indent=2, default=str), file=out)
     elif rows:
         cols = list(rows[0])
-        print("\t".join(cols), file=out)
+        sep, end = ("\t", "") if fmt == "text" else (" | ", " |")
+        print(("| " if end else "") + sep.join(cols) + end, file=out)
+        if end:
+            print("|" + "---|" * len(cols), file=out)
         for r in rows:
-            print("\t".join(str(r[c]) for c in cols), file=out)
+            print(("| " if end else "") + sep.join(str(r[c]) for c in cols) + end, file=out)
     return 0
+
+
+def impact(graph: Graph, rev: str, hops: int = 2) -> dict[str, list[dict]]:
+    """The symbols a git diff touches, what reaches them within `hops` inbound wires, and the tests that reach them.
+    rev is a revision (the working tree against it) or a range (origin/main...HEAD). Paths are relative to the
+    current directory, so run it where you ran build. Returns {"changed", "reached", "tests"}."""
+    diff = subprocess.run(["git", "diff", "-U0", "--no-color", "--relative", rev, "--"], capture_output=True, text=True, check=True).stdout
+    lines: dict[str, set[int]] = {}
+    path = None
+    for line in diff.splitlines():
+        if line.startswith("+++ "):
+            path = line[6:] if line.startswith("+++ b/") else None   # +++ /dev/null: the file is gone with its symbols
+        elif line.startswith("@@") and path:
+            m = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", line)
+            start, n = int(m.group(1)), int(m.group(2) or "1")
+            lines.setdefault(path, set()).update(range(start, start + max(n, 1)))   # a pure deletion lands on the line after it
+    changed: dict[str, dict] = {}
+    for path, nums in lines.items():
+        syms = graph.query("MATCH (s:Symbol {path: $p}) RETURN s.id AS id, s.qualified AS q, s.line AS a, s.end_line AS b", {"p": path})
+        unit = graph.query("MATCH (u:Unit {path: $p}) RETURN u.id AS id", {"p": path})
+        for n in sorted(nums):
+            inner = max((s for s in syms if s["a"] <= n <= s["b"]), key=lambda s: s["a"], default=None)
+            node = (inner["id"], inner["q"]) if inner else (unit[0]["id"], path) if unit else None
+            if node:
+                changed.setdefault(node[0], {"symbol": node[1], "path": path, "lines": []})["lines"].append(n)
+    if not changed:
+        return {"changed": [], "reached": [], "tests": []}
+    ids = list(changed)
+    # production code only: the tests that reach the change are their own section
+    reached = graph.query(f"MATCH (c)-[e:{WIRES}|DECORATES*1..{hops}]->(s), (cu:Unit) WHERE s.id IN $ids AND NOT c.id IN $ids "
+                          "AND label(c) <> 'Ast' AND cu.path = c.path AND NOT cu.test "
+                          "WITH c, min(length(e)) AS hops RETURN coalesce(c.qualified, c.path) AS symbol, c.path AS path, hops "
+                          "ORDER BY hops, symbol", {"ids": ids})
+    tests = graph.query("MATCH (t:Unit {test: true})-[:CONTAINS*1..2]->(f:Symbol)-[:CALLS*1..6]->(s:Symbol) WHERE s.id IN $ids "
+                        "RETURN DISTINCT f.qualified AS test, t.path AS path ORDER BY path, test", {"ids": ids})
+    rows = [{**c, "lines": _ranges(c["lines"])} for c in changed.values()]
+    return {"changed": rows, "reached": reached, "tests": tests}
+
+
+def _ranges(nums: list[int]) -> str:
+    out, start, prev = [], nums[0], nums[0]
+    for n in nums[1:] + [None]:
+        if n != prev + 1:
+            out.append(f"{start}-{prev}" if prev != start else str(start))
+            start = n
+        prev = n
+    return ",".join(out)
 
 
 def _run(args, out, err) -> int:
@@ -260,6 +313,18 @@ def _run(args, out, err) -> int:
         for name in ("internal", "outbound", "inbound"):
             print(f"== {name} ({len(sections[name])})", file=out)
             _print(sections[name], "text", out)
+        return 0
+    if args.command == "impact":
+        with Graph.open(args.db) as graph:
+            sections = impact(graph, args.rev, args.hops)
+        if not sections["changed"]:
+            print(f"nothing changed in scanned files between {args.rev} and the working tree", file=err)
+            return 1
+        if args.format == "json":
+            return _print(sections, "json", out)
+        for name in ("changed", "reached", "tests"):
+            print(f"{'###' if args.format == 'md' else '=='} {name} ({len(sections[name])})", file=out)
+            _print(sections[name], args.format, out)
         return 0
     if args.command == "domains":
         if not all("=" in s for s in args.spec):
