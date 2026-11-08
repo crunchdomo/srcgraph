@@ -25,7 +25,7 @@ srcgraph serve                        # build, then open the explorer at http://
 srcgraph query "MATCH (c)-[:INHERITS]->(b) WHERE b.name = 'BaseCommand' RETURN c.qualified"
 srcgraph query "MATCH (a:Ast {norm:'Decorator'}) RETURN a.text, count(*) ORDER BY count(*) DESC"
 srcgraph importers PySide6                       # every unit importing PySide6 or a submodule, with lines
-srcgraph callers get_tyre_compound_int           # who calls it, by name or qualified name, with lines
+srcgraph callers get_tyre_compound_int           # who calls it, by name, qualified name or a dotted suffix (Session.request), with lines
 srcgraph scope 'src/gui/**'                      # one compartment: its files, internal wiring, outbound and inbound wires (--no-tests)
 srcgraph domains api='src/api/**' billing='src/billing/**' orders='src/orders/**'   # who leans on whom, and every crossing edge
 srcgraph dead                                    # symbols nothing reaches and that are not entry points: deletion candidates

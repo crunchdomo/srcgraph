@@ -185,3 +185,9 @@ def test_domains_json_bad_spec_and_no_match(built, capsys):
     assert code == 2 and "name=glob" in err
     code, out, err = run(capsys, "domains", "--db", built, "x=nowhere/**")
     assert code == 1 and out == "" and "no wires cross" in err
+
+
+def test_callers_matches_a_dotted_suffix_of_the_qualified_name(built, capsys):
+    _, full, _ = run(capsys, "callers", "--db", built, "src.contracts.c.call")
+    code, out, _ = run(capsys, "callers", "--db", built, "c.call")
+    assert code == 0 and out == full and "src.handlers.h.view\t" in out
