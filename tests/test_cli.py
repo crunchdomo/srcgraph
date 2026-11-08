@@ -218,3 +218,28 @@ def test_hubs_no_tests_counts_production_neighbours_only(built, capsys):
     code, out, _ = run(capsys, "hubs", "--db", built, "--no-tests")
     assert code == 0 and "src.contracts.c.call\t1\t1" in out.splitlines()
     assert not any(l.startswith("tests/") for l in out.splitlines())
+
+
+def test_impact_maps_a_diff_onto_symbols_and_lists_what_reaches_them(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir("tests/fixtures/pyrepo")
+    path, original = "src/contracts/c.py", open("src/contracts/c.py").read()
+    try:
+        open(path, "w").write(original.replace("    return Contract().send()", "    req = req\n    return Contract().send()"))
+        db = str(tmp_path / "g.lbug")
+        assert main(["build", "--db", db]) == 0
+        capsys.readouterr()
+        code, out, _ = run(capsys, "impact", "--db", db, "HEAD")
+        assert code == 0
+        assert "== changed (1)" in out and "src.contracts.c.call\tsrc/contracts/c.py\t8" in out
+        assert "src.handlers.h.view\tsrc/handlers/h.py\t1" in out   # one hop: view calls call
+        assert out.count("tests.uses_call.test_call") == 1   # under tests, not repeated under reached
+        assert "tests.uses_call.test_call\ttests/uses_call.py" in out
+        code, out, _ = run(capsys, "impact", "--db", db, "--format", "md", "HEAD")
+        assert code == 0 and "| symbol | path | hops |" in out
+    finally:
+        open(path, "w").write(original)
+
+
+def test_impact_with_nothing_changed_says_so(built, capsys):
+    code, out, err = run(capsys, "impact", "--db", built, "HEAD")
+    assert code == 1 and "nothing changed" in err

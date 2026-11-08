@@ -296,7 +296,53 @@ put `FastAPI`, `Depends`, `url_for` and `requests.api.get` in `dead` (32 rows on
 `--src src --src .` crashed on the file scanned twice; `callers Session.request` found nothing
 without the module path; and a `TYPE_CHECKING` import looked like a runtime dependency.
 
-## 5. As a library: one rule in CI
+## 5. What did my change touch (Flask, FastAPI)
+
+Everything above is about the codebase. `impact` is about one change: it maps the diff onto the
+symbols its lines fall in, then lists the production code that reaches them and the tests that cover
+them. One line touched inside `url_for`:
+
+```
+$ srcgraph impact HEAD
+== changed (1)
+symbol                 path                    lines
+flask.helpers.url_for  src/flask/helpers.py    200
+== reached (0)
+== tests (28)
+test                                                   path
+test_appctx.test_basic_url_generation                  tests/test_appctx.py
+test_appctx.test_url_generation_requires_server_name   tests/test_appctx.py
+test_basic.test_build_error_handler                    tests/test_basic.py
+test_basic.test_static_files                           tests/test_basic.py
+…
+```
+
+Nothing inside the package calls `url_for` directly, 28 tests do, and those are the ones to run.
+The same on FastAPI's dependency resolver, three hops out:
+
+```
+$ srcgraph impact HEAD --hops 3
+== changed (1)
+symbol                                 path                           lines
+fastapi.dependencies.utils.get_dependant  fastapi/dependencies/utils.py  300
+== reached (18)
+symbol                                                       path                           hops
+fastapi.dependencies.utils.get_parameterless_sub_dependant   fastapi/dependencies/utils.py  1
+fastapi.dependencies.utils.solve_dependencies                fastapi/dependencies/utils.py  1
+fastapi.routing._build_dependant_with_parameterless_dependencies  fastapi/routing.py        1
+fastapi.routing.APIWebSocketRoute.__init__                   fastapi/routing.py             2
+fastapi.routing.get_request_handler                          fastapi/routing.py             2
+…
+== tests (0)
+```
+
+The reach is right: the change is three hops from every request handler. The tests section is the
+error bar in action. FastAPI's tests reach `get_dependant` through `app.get(...)` on a local
+`FastAPI` instance, a method call the graph cannot follow, so it reports none and says so rather than
+guessing. `--format md` prints the same three sections as Markdown tables, which is how it lands on
+a pull request: `srcgraph impact origin/main...HEAD --format md | gh pr comment -F -`.
+
+## 6. As a library: one rule in CI
 
 Everything above is a dict away in Python. The sans-IO rule from section 1 as a check, on the
 runtime coupling only:
