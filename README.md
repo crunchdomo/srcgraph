@@ -36,6 +36,8 @@ srcgraph trace 'src.lib.time.parse_time_string("1:23.456")'   # run it and print
 srcgraph trace tests/lib/test_time.py::test_format_time_valid_values   # same, for one pytest test
 ```
 
+Worked examples on Flask, Requests and FastAPI, with the output as printed, are in [docs/use-cases.md](docs/use-cases.md).
+
 `scope` is the airplane view: pick a compartment by path and see what stays in the room, what the room controls, and what controls it. The header lists every file in the compartment with its doc line; a blank doc is an undocumented file. `--no-tests` hides wires that touch a test unit, leaving the real consumers.
 
 `domains` is the same view for a repo with several bounded contexts in it: name each domain with a path glob and the wires roll up to a from/to/edges matrix, followed by every crossing edge with its source, label, target and line. Wires inside a domain and paths that match no domain are left out, so the output is exactly the coupling between the parts you named. On the test fixture, `handlers=src/handlers/** contracts=src/contracts/** db=src/db/** gateway=src/gateway/**` gives three pairs (handlers→contracts 3, contracts→gateway 2, handlers→db 2) and seven crossings. Nothing says "a domain may not do that": `adrgraph` is where the rules live, this is the evidence.
