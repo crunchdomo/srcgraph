@@ -47,11 +47,10 @@ def test_ast_tier_and_derived_from(tmp_path):
     s = Symbol("src/a.py::a.f", "f", "a.f", "function", "python", "src/a.py", 1, 2, "function_definition")
     g.load_nodes("Unit", unit_rows()); g.load_nodes("Symbol", [vars(s)]); g.load_nodes("Ast", [vars(a) for a in (root, fn, name)])
     g.load_edges([Edge("DERIVED_FROM", s.id, fn.id), Edge("DERIVED_FROM", "src/a.py", root.id),
-                  Edge("CHILD", root.id, fn.id), Edge("CHILD", fn.id, name.id)],
-                 props={("CHILD", fn.id, name.id): {"field": "name"}})
+                  Edge("CHILD", root.id, fn.id), Edge("CHILD", fn.id, name.id)])
     assert g.count("Ast") == 3
     assert g.query("MATCH (:Symbol)-[:DERIVED_FROM]->(a:Ast) RETURN a.kind AS k") == [{"k": "function_definition"}]
-    assert g.query("MATCH (:Ast {kind:'function_definition'})-[c:CHILD]->(n:Ast) RETURN c.field AS f, n.text AS t") == [{"f": "name", "t": "f"}]
+    assert g.query("MATCH (:Ast {kind:'function_definition'})-[:CHILD]->(n:Ast) RETURN n.field AS f, n.text AS t") == [{"f": "name", "t": "f"}]
     g.close()
 
 
@@ -102,7 +101,7 @@ def test_load_code_sets_child_field(tmp_path, monkeypatch):
     g = Graph(str(tmp_path / "g.lbug"))
     g.load_code(scan(["."]))
     assert g.count("Ast") > 100
-    assert g.query("MATCH (:Ast {kind:'class_definition'})-[c:CHILD]->(n:Ast {kind:'identifier'}) WHERE c.field = 'name' RETURN n.text AS t ORDER BY t")[0]["t"] == "Base"
+    assert g.query("MATCH (:Ast {kind:'class_definition'})-[:CHILD]->(n:Ast {kind:'identifier'}) WHERE n.field = 'name' RETURN n.text AS t ORDER BY t")[0]["t"] == "Base"
     g.close()
 
 

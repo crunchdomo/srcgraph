@@ -73,7 +73,7 @@ def test_subtree_reaches_the_syntax_tier(server):
 def test_source_stays_inside_the_root(server):
     _, src = get(server, "/api/source?path=src/contracts/c.py&from=1&to=2")
     assert src["lines"][0].startswith("from src.gateway") and src["from"] == 1
-    assert status(server, "/api/source?path=../../conftest.py") == 403
+    assert status(server, "/api/source?path=../../conftest.py") == 404
     assert status(server, "/api/source?path=missing.py") == 404
 
 

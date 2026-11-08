@@ -20,7 +20,7 @@ class Repo:
         return self.graph.query(cypher, params)
 
     def scope(self, glob: str, no_tests: bool = False) -> dict[str, list[dict]]:
-        return _scope(self.graph, glob, no_tests)[1]
+        return _scope(self.graph, glob, no_tests)
 
     def domains(self, mapping: dict[str, str]) -> dict[str, list[dict]]:
         return _domains(self.graph, mapping)
