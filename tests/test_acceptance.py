@@ -16,6 +16,7 @@ pytestmark = pytest.mark.skipif(not REPOS, reason="set SRCGRAPH_ACCEPT_REPO=<pat
 # Share of CALLS edges landing on unresolved symbols. f1-race-replay on 2026-11-06: 0.951; with #1, #2 and #8: 0.377.
 # Measured 2026-11-07: adr-as-code 0.25, srcgraph 0.36, kg-wiki 0.44, jobapps 0.49. What remains is mostly calls
 # into external libraries and methods on untyped instances, which a static graph cannot place.
+# 2026-11-08, re-exports followed (#55): unchanged here, these are applications; on fastapi `dead` went 32 -> 4 rows.
 UNRESOLVED_CALL_CEILING = 0.5
 
 README_QUERIES = {

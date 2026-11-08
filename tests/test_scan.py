@@ -243,3 +243,10 @@ def test_a_file_under_two_roots_is_scanned_once_under_the_most_specific(tmp_path
     assert len(ids) == len(set(ids))
     names = {u.path: u.name for u in repo.units}
     assert names["src/contracts/c.py"] == "contracts.c" and names["tests/uses_call.py"] == "tests.uses_call"
+
+
+def test_from_package_import_follows_the_init_reexport(repo):
+    # contracts/__init__.py says `from .c import warm as warm`, so `from src.contracts import warm` is c.warm
+    e = {(d.label, d.src, d.dst) for d in repo.edges}
+    assert ("CALLS", "tests/uses_call.py::tests.uses_call.test_call", "src/contracts/c.py::src.contracts.c.warm") in e
+    assert "unresolved::src.contracts.warm" not in {s.id for s in repo.symbols}
