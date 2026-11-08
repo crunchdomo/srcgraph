@@ -58,7 +58,12 @@ def _walk(roots: list[str], excludes: tuple[str, ...]) -> list[tuple[str, str]]:
                 rel = _rel(full)
                 if not excluded(rel):
                     found.append((root, rel))
-    return found
+    # a file under two roots (--src src --src .) belongs to the most specific one, and is scanned once
+    best: dict[str, str] = {}
+    for root, rel in found:
+        if rel not in best or len(root) > len(best[rel]):
+            best[rel] = root
+    return sorted((root, rel) for rel, root in best.items())
 
 
 def _git_files(root: str) -> list[str] | None:
