@@ -1,7 +1,7 @@
 """Shared graph vocabulary. Every extractor emits only these types."""
 from dataclasses import dataclass, field
 
-SYMBOL_KINDS = {"function", "method", "class", "type", "variable", "resource", "module_call", "builtin", "unresolved"}
+SYMBOL_KINDS = {"function", "method", "class", "variable", "resource", "module_call", "builtin", "unresolved"}
 EDGE_LABELS = {"CONTAINS", "IMPORTS", "CALLS", "REFERENCES", "INHERITS", "DECORATES"}
 
 # Normalised syntax kinds: one vocabulary across grammars. Owned here; extractors only map onto it.
@@ -44,7 +44,8 @@ class Edge:
     src: str
     dst: str
     line: int = 0
-    guard: str = ""   # CALLS only: nearest enclosing if/for/while/try as kind@line, "" when unconditional
+    guard: str = ""   # CALLS, IMPORTS, REFERENCES: nearest enclosing if/for/while/try as kind@line, "typing" under
+                      # `if TYPE_CHECKING`, "" when unconditional
 
 
 @dataclass(frozen=True)
@@ -74,10 +75,13 @@ class RawImport:
     line: int
     names: tuple[tuple[str, str], ...] = ()
     alias: str | None = None
+    guard: str = ""   # as on Edge; "typing" when the import sits under `if TYPE_CHECKING`
 
 
-REF_RELATIONS = {"calls": "CALLS", "references": "REFERENCES", "names": "REFERENCES", "inherits": "INHERITS", "decorates": "DECORATES"}
-# "names" is a bare identifier used as a value or annotation; the scanner keeps it only when it resolves to a scanned symbol
+REF_RELATIONS = {"calls": "CALLS", "references": "REFERENCES", "names": "REFERENCES", "reads": "REFERENCES",
+                 "inherits": "INHERITS", "decorates": "DECORATES"}
+# "names" is a bare identifier used as a value or annotation; the scanner keeps it only when it resolves to a scanned symbol.
+# "reads" is the first argument of getattr(X, ...): X is a registry read by name; kept only when it is a scanned module.
 
 
 @dataclass(frozen=True)

@@ -19,11 +19,11 @@ class Repo:
     def query(self, cypher: str, params: dict | None = None) -> list[dict]:
         return self.graph.query(cypher, params)
 
-    def scope(self, glob: str, no_tests: bool = False) -> dict[str, list[dict]]:
-        return _scope(self.graph, glob, no_tests)[1]
+    def scope(self, glob: str, no_tests: bool = False, no_typing: bool = False) -> dict[str, list[dict]]:
+        return _scope(self.graph, glob, no_tests, no_typing)
 
-    def domains(self, mapping: dict[str, str]) -> dict[str, list[dict]]:
-        return _domains(self.graph, mapping)
+    def domains(self, mapping: dict[str, str], no_typing: bool = False) -> dict[str, list[dict]]:
+        return _domains(self.graph, mapping, no_typing)
 
     def trace(self, expr: str) -> list[dict]:
         with contextlib.chdir(self.root):   # symbol paths are relative to the root; the tracer imports from cwd
@@ -43,6 +43,9 @@ def _preset(name: str, cypher: str):
     if "$name" in cypher:
         def method(self, name_: str) -> list[dict]:
             return self.graph.query(cypher, {"name": name_, "prefix": name_ + "."})
+    elif "$tests" in cypher:
+        def method(self, no_tests: bool = False) -> list[dict]:
+            return self.graph.query(cypher, {"tests": not no_tests})
     else:
         def method(self) -> list[dict]:
             return self.graph.query(cypher)

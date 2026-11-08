@@ -37,28 +37,24 @@ def _walk(roots: list[str], excludes: tuple[str, ...]) -> list[tuple[str, str]]:
             return True
         return any(g.fullmatch("/".join(parts[:i])) for i in range(1, len(parts) + 1) for g in paths)
 
-    found = []
-    for root in roots:
-        tracked = _git_files(root)
-        if tracked is not None:   # inside a git repo, git decides what is part of the project: .gitignore is honoured
-            for name in tracked:
-                full = os.path.join(root, name)
-                if os.path.splitext(name)[1] in EXTRACTORS and os.path.isfile(full) and not os.path.islink(full):
-                    rel = _rel(full)
-                    if not excluded(rel):
-                        found.append((root, rel))
-            continue
+    def walk(root: str):
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = sorted(d for d in dirnames
                                  if not os.path.islink(os.path.join(dirpath, d)) and not excluded(_rel(os.path.join(dirpath, d))))
-            for fn in sorted(filenames):
-                full = os.path.join(dirpath, fn)
-                if os.path.islink(full) or os.path.splitext(fn)[1] not in EXTRACTORS:
-                    continue
-                rel = _rel(full)
-                if not excluded(rel):
-                    found.append((root, rel))
-    return found
+            yield from (os.path.join(dirpath, fn) for fn in sorted(filenames))
+
+    found = []
+    for root in roots:
+        tracked = _git_files(root)   # inside a git repo, git decides what is part of the project: .gitignore is honoured
+        for full in (os.path.join(root, n) for n in tracked) if tracked is not None else walk(root):
+            if os.path.splitext(full)[1] in EXTRACTORS and os.path.isfile(full) and not os.path.islink(full) and not excluded(_rel(full)):
+                found.append((root, _rel(full)))
+    # a file under two roots (--src src --src .) belongs to the most specific one, and is scanned once
+    best: dict[str, str] = {}
+    for root, rel in found:
+        if rel not in best or len(root) > len(best[rel]):
+            best[rel] = root
+    return sorted((root, rel) for rel, root in best.items())
 
 
 def _git_files(root: str) -> list[str] | None:
@@ -155,7 +151,8 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
         return sid
 
     aliases: dict[str, dict[str, str]] = {}
-    imports: set[tuple[str, str, int]] = set()   # (unit, target, line): `from m import a, b` is one wire, not two
+    imports: set[tuple[str, str, int, str]] = set()   # (unit, target, line, guard): `from m import a, b` is one wire, not two
+    typing_names: dict[str, set[str]] = {}   # unit -> names bound only under `if TYPE_CHECKING`
     for ex in extractions:
         for imp in ex.imports:
             importer = units[imp.unit_id]
@@ -168,17 +165,21 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
                     if target is None:
                         target = external(module or dotted, importer.lang)
                         _hint(res, index, module or dotted)
-                    imports.add((imp.unit_id, target, imp.line))
+                    imports.add((imp.unit_id, target, imp.line, imp.guard))
                     amap[alias] = dotted
+                    if imp.guard == "typing":
+                        typing_names.setdefault(imp.unit_id, set()).add(alias)
             else:
                 target = unit_for(module)
                 if target is None:
                     target = external(module, importer.lang)
                     _hint(res, index, module)
-                imports.add((imp.unit_id, target, imp.line))
+                imports.add((imp.unit_id, target, imp.line, imp.guard))
                 amap[imp.alias or module.split(".")[0]] = module if imp.alias else module.split(".")[0]
+                if imp.guard == "typing":
+                    typing_names.setdefault(imp.unit_id, set()).add(imp.alias or module.split(".")[0])
 
-    res.edges.extend(Edge("IMPORTS", s, d, line=l) for s, d, l in sorted(imports))
+    res.edges.extend(Edge("IMPORTS", s, d, line=l, guard=g) for s, d, l, g in sorted(imports))
 
     # package -> child CONTAINS by name prefix
     for u in list(units.values()):
@@ -187,30 +188,53 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
                 if other.kind in ("module", "package") and other.name.rpartition(".")[0] == u.name:
                     res.edges.append(Edge("CONTAINS", u.id, other.id))
 
+    def resolve(qualified: str, hops: int = 3) -> str | None:
+        """A Python symbol by qualified name, following `from .m import name` in the package the name is read from."""
+        sid = by_qualified.get(("python", "", qualified))
+        if sid is not None or not hops:
+            return sid
+        parts = qualified.split(".")
+        for i in range(len(parts) - 1, 0, -1):   # longest scanned unit prefix first
+            uid = unit_for(".".join(parts[:i]))
+            if uid is not None:
+                alias = aliases.get(uid, {}).get(parts[i])
+                # ponytail: three hops cover a facade over a facade; an __all__ built at runtime stays invisible
+                return resolve(".".join([alias, *parts[i + 1:]]), hops - 1) if alias else None
+        return None
+
     entry_ids: set[str] = set()
     for ex in extractions:
         for ref in ex.refs:
             src_unit = units[ref.src_id] if ref.src_id in units else units[symbols[ref.src_id].path]
             lang = src_unit.lang
+            guard = ref.guard
             if lang == "python":
                 head, dot, rest = ref.name.partition(".")
                 amap = aliases.get(src_unit.id, {})
+                if head in typing_names.get(src_unit.id, ()):   # an annotation naming a TYPE_CHECKING import is typing-only too
+                    guard = guard or "typing"
                 base = amap[head] if head in amap else f"{src_unit.name}.{head}"
                 qualified = f"{base}{dot}{rest}"
+                if ref.relation == "reads":   # getattr(module, name): the module is a registry; a wire to the unit, or nothing
+                    uid = unit_for(qualified)
+                    if uid is not None:
+                        res.edges.append(Edge("REFERENCES", ref.src_id, uid, line=ref.line))
+                    continue
                 if ref.relation == "names":
-                    sid = by_qualified.get((lang, "", qualified))
+                    sid = resolve(qualified)
                     if sid is None:   # not a scanned symbol: a local, a builtin or an unknown; no node for it
                         continue
                     if symbols[sid].kind == "variable" and symbols[sid].path == src_unit.path:
                         continue   # a module reading its own globals is not a wire worth drawing
                 if head not in amap and head in BUILTIN_NAMES and (lang, "", f"{src_unit.name}.{head}") not in by_qualified:
                     target = builtin(ref.name, lang)
-                    res.edges.append(Edge(REF_RELATIONS[ref.relation], ref.src_id, target, line=ref.line, guard=ref.guard))
+                    res.edges.append(Edge(REF_RELATIONS[ref.relation], ref.src_id, target, line=ref.line, guard=guard))
                     continue
             else:
                 qualified = ref.name
-            target = by_qualified.get((lang, scope(lang, src_unit.path), qualified)) or unresolved(qualified, lang)
-            res.edges.append(Edge(REF_RELATIONS[ref.relation], ref.src_id, target, line=ref.line, guard=ref.guard))
+            target = (resolve(qualified) if lang == "python" else by_qualified.get((lang, scope(lang, src_unit.path), qualified))
+                      ) or unresolved(qualified, lang)
+            res.edges.append(Edge(REF_RELATIONS[ref.relation], ref.src_id, target, line=ref.line, guard=guard))
             if ref.relation == "calls" and (ref.entry or src_unit.test):
                 entry_ids.add(target)
     for root in roots:  # console scripts declared in pyproject.toml: "pkg.mod:func"

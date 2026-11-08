@@ -158,11 +158,12 @@ def test_callers_and_scope_show_the_guard_column(built, capsys):
     assert "src.boom.boom\tCALLS\tsrc.boom.inner\t2\t" in out.splitlines()
 
 
-def test_empty_callers_points_at_visibility(built, capsys):
+def test_empty_callers_says_how_much_the_graph_sees(built, capsys):
     code, out, err = run(capsys, "callers", "--db", built, "nothing_calls_this")
-    assert code == 1 and out == "" and "visibility" in err
-    code, out, _ = run(capsys, "visibility", "--db", built)
-    assert code == 0 and out.splitlines()[0] == "path\tresolved\tunresolved"
+    assert code == 1 and out == "" and "no callers of nothing_calls_this" in err
+    assert "calls resolved" in err and "self" in err   # the error bar and the blind spot, only when the answer is empty
+    with pytest.raises(SystemExit):   # the standalone table is gone
+        main(["visibility", "--db", built])
 DOMAINS = ["handlers=src/handlers/**", "contracts=src/contracts/**", "db=src/db/**", "gateway=src/gateway/**"]
 
 
@@ -185,3 +186,35 @@ def test_domains_json_bad_spec_and_no_match(built, capsys):
     assert code == 2 and "name=glob" in err
     code, out, err = run(capsys, "domains", "--db", built, "x=nowhere/**")
     assert code == 1 and out == "" and "no wires cross" in err
+
+
+def test_dead_spares_public_functions_of_a_module_read_through_getattr(built, capsys):
+    _, out, _ = run(capsys, "dead", "--db", built)
+    names = {line.split("\t")[0] for line in out.splitlines()[1:]}
+    assert "src.contracts.c.plug" not in names and "src.contracts.c._hidden" in names
+
+
+def test_callers_matches_a_dotted_suffix_of_the_qualified_name(built, capsys):
+    _, full, _ = run(capsys, "callers", "--db", built, "src.contracts.c.call")
+    code, out, _ = run(capsys, "callers", "--db", built, "c.call")
+    assert code == 0 and out == full and "src.handlers.h.view\t" in out
+
+
+def test_scope_and_domains_can_hide_typing_only_wires(built, capsys):
+    _, out, _ = run(capsys, "scope", "--db", built, "src/other/**")
+    assert "src/other/typed.py\tIMPORTS\tsrc.contracts.c\t5\ttyping" in out
+    assert "src.other.typed.take\tREFERENCES\tsrc.contracts.c.Contract\t8\ttyping" in out
+    code, out, _ = run(capsys, "scope", "--db", built, "--no-typing", "src/other/**")
+    assert code == 0 and "\ttyping\n" not in out and "src/other/typed.py\t" in out   # the `typing` module import stays
+    _, out, _ = run(capsys, "domains", "--db", built, "other=src/other/**", "contracts=src/contracts/**")
+    assert "other\tcontracts\tsrc/other/typed.py\tIMPORTS\tsrc.contracts.c\t5" in out
+    code, out, err = run(capsys, "domains", "--db", built, "--no-typing", "other=src/other/**", "contracts=src/contracts/**")
+    assert code == 1 and "no wires cross" in out + err
+
+
+def test_hubs_no_tests_counts_production_neighbours_only(built, capsys):
+    _, out, _ = run(capsys, "hubs", "--db", built)
+    assert "src.contracts.c.call\t3\t1" in out.splitlines()   # h.view plus two test functions
+    code, out, _ = run(capsys, "hubs", "--db", built, "--no-tests")
+    assert code == 0 and "src.contracts.c.call\t1\t1" in out.splitlines()
+    assert not any(l.startswith("tests/") for l in out.splitlines())

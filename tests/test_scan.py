@@ -228,3 +228,32 @@ def test_scanning_a_package_directly_warns(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert any("is itself a package" in w for w in scan(["pkg"]).warnings)
     assert not any("is itself a package" in w for w in scan(["."]).warnings)
+
+
+def test_getattr_on_a_module_references_the_unit(repo):
+    # getattr(c, name) reads src.contracts.c as a registry: a REFERENCES edge from the caller to the unit, nothing unresolved
+    assert any(e.label == "REFERENCES" and e.src == "src/handlers/h.py::src.handlers.h.dispatch" and e.dst == "src/contracts/c.py"
+               for e in repo.edges)
+    assert not any(s.kind == "unresolved" and s.name.endswith(".c") for s in repo.symbols)
+
+def test_a_file_under_two_roots_is_scanned_once_under_the_most_specific(tmp_path, monkeypatch):
+    monkeypatch.chdir("tests/fixtures/pyrepo")
+    repo = scan(["src", "."])
+    ids = [u.id for u in repo.units]
+    assert len(ids) == len(set(ids))
+    names = {u.path: u.name for u in repo.units}
+    assert names["src/contracts/c.py"] == "contracts.c" and names["tests/uses_call.py"] == "tests.uses_call"
+
+
+def test_from_package_import_follows_the_init_reexport(repo):
+    # contracts/__init__.py says `from .c import warm as warm`, so `from src.contracts import warm` is c.warm
+    e = {(d.label, d.src, d.dst) for d in repo.edges}
+    assert ("CALLS", "tests/uses_call.py::tests.uses_call.test_call", "src/contracts/c.py::src.contracts.c.warm") in e
+    assert "unresolved::src.contracts.warm" not in {s.id for s in repo.symbols}
+
+
+def test_type_checking_imports_and_their_annotations_carry_the_typing_guard(repo):
+    g = {(d.label, d.src, d.dst): d.guard for d in repo.edges}
+    assert g[("IMPORTS", "src/other/typed.py", "src/contracts/c.py")] == "typing"
+    assert g[("REFERENCES", "src/other/typed.py::src.other.typed.take", "src/contracts/c.py::src.contracts.c.Contract")] == "typing"
+    assert g[("IMPORTS", "src/handlers/h.py", "src/contracts/c.py")] == ""

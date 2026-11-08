@@ -25,9 +25,9 @@ PRESETS = {
     "importers": ("units that import a module or any of its submodules", "no importers of {}",
                   "MATCH (u:Unit)-[i:IMPORTS]->(v:Unit) WHERE v.name = $name OR v.name STARTS WITH $prefix "
                   "RETURN u.path AS importer, i.line AS line, v.name AS module ORDER BY importer, line"),
-    "callers": ("symbols and units that call a symbol, by name or qualified name",
-                "no callers of {} (calls the graph could not resolve do not count: see `srcgraph visibility`)",
-                "MATCH (c)-[r:CALLS]->(s:Symbol) WHERE s.name = $name OR s.qualified = $name "
+    "callers": ("symbols and units that call a symbol, by name, qualified name or a dotted suffix (Session.request)",
+                "no callers of {}",
+                "MATCH (c)-[r:CALLS]->(s:Symbol) WHERE s.name = $name OR s.qualified = $name OR s.qualified ENDS WITH concat('.', $name) "
                 "RETURN coalesce(c.qualified, c.path) AS caller, r.line AS line, s.qualified AS target, r.guard AS guard ORDER BY caller, line"),
     "dead": ("symbols nothing calls, references, inherits or decorates, and that are not entry points (candidates: "
              "getattr and registries are invisible)", "nothing is dead",
@@ -35,7 +35,9 @@ PRESETS = {
              # dead: the graph has no types, so that is the best it can say
              "MATCH (u:Unit)-[:CONTAINS*1..3]->(s:Symbol) WHERE NOT u.test AND s.kind IN ['function', 'method', 'class'] "
              "AND NOT s.entry AND NOT s.name STARTS WITH '__' "
-             "OPTIONAL MATCH ()-[r:CALLS|REFERENCES|INHERITS|DECORATES]->(s) WITH s, count(r) AS n WHERE n = 0 "
+             "OPTIONAL MATCH ()-[r:CALLS|REFERENCES|INHERITS|DECORATES]->(s) WITH u, s, count(r) AS n WHERE n = 0 "
+             # a module something reads through getattr is a registry: its public names are looked up, not called
+             "OPTIONAL MATCH ()-[g:REFERENCES]->(u) WITH s, count(g) AS reg WHERE reg = 0 OR s.name STARTS WITH '_' "
              # decorated: a framework registered it (routes, tasks, signals); DECORATES points from the symbol to the decorator
              "OPTIONAL MATCH (s)-[d:DECORATES]->() WITH s, count(d) AS deco WHERE deco = 0 "
              # a method on a subclass of something external overrides a hook the framework calls (paintEvent, handle_data)
@@ -47,15 +49,14 @@ PRESETS = {
              "RETURN s.qualified AS symbol, s.path AS path, s.line AS line ORDER BY path, line"),
     "hubs": ("symbols and units with the most distinct neighbours in and out: what you must not break, and what does too much",
              "no wires at all",
-             f"MATCH (n:Symbol:Unit) WHERE NOT n.kind IN ['unresolved', 'builtin', 'external'] "
-             f"OPTIONAL MATCH (a)-[:{WIRES}]->(n) WITH n, count(DISTINCT a) AS fan_in "
+             # $tests false: test units are neither nodes nor neighbours, so a library's fan-in is not its test suite
+             f"MATCH (n:Symbol:Unit), (un:Unit) WHERE un.path = n.path AND NOT n.kind IN ['unresolved', 'builtin', 'external'] "
+             f"AND ($tests OR NOT un.test) "
+             f"OPTIONAL MATCH (a)-[:{WIRES}]->(n), (ua:Unit) WHERE ua.path = a.path AND ($tests OR NOT ua.test) "
+             f"WITH n, count(DISTINCT a) AS fan_in "
              f"OPTIONAL MATCH (n)-[:{WIRES}]->(b) WHERE NOT b.kind IN ['unresolved', 'builtin'] "
              "WITH n, fan_in, count(DISTINCT b) AS fan_out WHERE fan_in + fan_out > 0 "
              "RETURN coalesce(n.qualified, n.path) AS node, fan_in, fan_out ORDER BY fan_in + fan_out DESC, node LIMIT 30"),
-    "visibility": ("per unit, calls that resolved to a scanned symbol or builtin vs calls to targets the graph cannot see; "
-                   "read the other answers against this", "no calls at all",
-                   "MATCH (a)-[:CALLS]->(t) WITH a.path AS path, CASE WHEN t.kind IN ['unresolved', 'external'] THEN 1 END AS miss "
-                   "RETURN path, count(*) - count(miss) AS resolved, count(miss) AS unresolved ORDER BY unresolved DESC, path"),
     "untested": ("symbols no test unit reaches through calls (up to six hops)", "everything is reached from a test",
                  # ponytail: 6-hop expansion from every test unit; precompute a reached set if a big repo makes this slow
                  "MATCH (u:Unit)-[:CONTAINS*1..3]->(s:Symbol) WHERE NOT u.test AND s.kind IN ['function', 'method', 'class'] "
@@ -97,10 +98,13 @@ def _parser() -> argparse.ArgumentParser:
     ro(sub.add_parser("query", help="run Cypher against the last built graph"), "cypher")
     for name, (help_, _, cypher) in PRESETS.items():
         ro(sub.add_parser(name, help=help_), "name" if "$name" in cypher else None)
+    sub.choices["hubs"].add_argument("--no-tests", action="store_true", help="leave test units out, as nodes and as neighbours")
     sp = sub.add_parser("scope", help="one compartment: its files with doc lines, internal wiring, outbound and inbound wires")
     ro(sp, "glob", "path glob for the compartment, e.g. 'src/gui/**'")
     sp.add_argument("--no-tests", action="store_true", help="hide wires that touch a test unit")
+    sp.add_argument("--no-typing", action="store_true", help="hide imports and annotations made under if TYPE_CHECKING")
     sp = sub.add_parser("domains", help="wires rolled up between named groups of paths, and every edge that crosses between them")
+    sp.add_argument("--no-typing", action="store_true", help="hide imports and annotations made under if TYPE_CHECKING")
     ro(sp)
     sp.add_argument("spec", nargs="+", help="name=glob, e.g. billing='src/billing/**'")
     ro(sub.add_parser("trace", help="run an expression in the interpreter on PATH and print the calls it makes through the graph"),
@@ -108,15 +112,15 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
-def scope(graph: Graph, glob: str, no_tests: bool = False) -> tuple[int, dict[str, list[dict]]]:
-    """What happens inside one compartment and what crosses its boundary. Returns (matched node count, sections)."""
+def scope(graph: Graph, glob: str, no_tests: bool = False, no_typing: bool = False) -> dict[str, list[dict]]:
+    """What happens inside one compartment and what crosses its boundary; every section empty when nothing matches."""
     a, pa = compile_selector({"path": glob}, "a", "a")
     b, pb = compile_selector({"path": glob}, "b", "b")
     params = {**pa, **pb}
-    matched = graph.query(f"MATCH (a) WHERE {a} RETURN count(*) AS c", params)[0]["c"]
     # a symbol's unit is the Unit with its path; --no-tests drops wires with a test unit at either end
     tests = ", (ua:Unit), (ub:Unit)" if no_tests else ""
     not_tests = " AND ua.path = a.path AND ub.path = b.path AND NOT ua.test AND NOT ub.test" if no_tests else ""
+    not_tests += NOT_TYPING if no_typing else ""
 
     def edges(where: str) -> list[dict]:
         # unresolved and builtin targets are not wires that land anywhere worth drawing
@@ -125,7 +129,7 @@ def scope(graph: Graph, glob: str, no_tests: bool = False) -> tuple[int, dict[st
                            f"RETURN coalesce(a.qualified, a.path) AS source, label(r) AS label, "
                            f"coalesce(b.qualified, b.name) AS target, r.line AS line, coalesce(r.guard, '') AS guard "
                            f"ORDER BY source, line, target", params)
-    return matched, {
+    return {
         "doc": graph.query(f"MATCH (a:Unit) WHERE {a} RETURN a.path AS path, a.doc AS doc ORDER BY path", params),
         "internal": edges(f"({a}) AND ({b})"),
         "outbound": edges(f"({a}) AND NOT ({b})"),
@@ -133,7 +137,10 @@ def scope(graph: Graph, glob: str, no_tests: bool = False) -> tuple[int, dict[st
     }
 
 
-def domains(graph: Graph, mapping: dict[str, str]) -> dict[str, list[dict]]:
+NOT_TYPING = " AND coalesce(r.guard, '') <> 'typing'"   # imports and annotations under `if TYPE_CHECKING`
+
+
+def domains(graph: Graph, mapping: dict[str, str], no_typing: bool = False) -> dict[str, list[dict]]:
     """Wires rolled up between named groups of paths, plus every edge that crosses from one group to another.
     A path matching no group is ignored. Returns {"matrix", "crossings"}."""
     groups = [(name, re.compile(glob_to_regex(glob))) for name, glob in mapping.items()]
@@ -142,7 +149,7 @@ def domains(graph: Graph, mapping: dict[str, str]) -> dict[str, list[dict]]:
         return next((n for n, g in groups if path and g.fullmatch(path)), None)
 
     # ponytail: one query for every wire, classified in Python; a per-pair Cypher count if a graph makes this slow
-    rows = graph.query(f"MATCH (a)-[r:{WIRES}]->(b) WHERE label(a) <> 'Ast' AND NOT b.kind IN ['unresolved', 'builtin'] "
+    rows = graph.query(f"MATCH (a)-[r:{WIRES}]->(b) WHERE label(a) <> 'Ast' AND NOT b.kind IN ['unresolved', 'builtin']{NOT_TYPING if no_typing else ''} "
                        "RETURN a.path AS ap, coalesce(a.qualified, a.path) AS source, label(r) AS label, "
                        "b.path AS bp, coalesce(b.qualified, b.name) AS target, r.line AS line")
     crossings = sorted(({"from": fa, "to": fb, "source": r["source"], "label": r["label"], "target": r["target"], "line": r["line"]}
@@ -242,8 +249,8 @@ def _run(args, out, err) -> int:
         return 0
     if args.command == "scope":
         with Graph.open(args.db) as graph:
-            matched, sections = scope(graph, args.glob, args.no_tests)
-        if not matched:
+            sections = scope(graph, args.glob, args.no_tests, args.no_typing)
+        if not any(sections.values()):
             print(f"nothing matches {args.glob}", file=err)
             return 1
         if args.format == "json":
@@ -259,7 +266,7 @@ def _run(args, out, err) -> int:
             print("error: domains take name=glob pairs", file=err)
             return 2
         with Graph.open(args.db) as graph:
-            sections = domains(graph, dict(s.split("=", 1) for s in args.spec))
+            sections = domains(graph, dict(s.split("=", 1) for s in args.spec), args.no_typing)
         if not sections["crossings"]:
             print("no wires cross between those domains", file=err)
             return 1
@@ -285,7 +292,13 @@ def _run(args, out, err) -> int:
             if args.command == "untested" and not repo.query("MATCH (u:Unit {test: true}) RETURN u.id LIMIT 1"):
                 print("no test units: nothing reaches anything", file=err)
                 return 1
-            rows = getattr(repo, args.command)(name) if name else getattr(repo, args.command)()
+            preset = getattr(repo, args.command)
+            rows = preset(name) if name else preset(no_tests=True) if getattr(args, "no_tests", False) else preset()
+            if not rows and args.command in ("callers", "dead"):   # an empty answer comes with its error bar
+                v = repo.query("MATCH ()-[:CALLS]->(t) RETURN count(*) AS n, "
+                               "count(CASE WHEN t.kind IN ['unresolved', 'external'] THEN 1 END) AS miss")[0]
+                empty += (f" ({v['n'] - v['miss']} of {v['n']} calls resolved; a method called on anything but self "
+                          f"or a module leaves no edge, so it can look uncalled)")
         if not rows:
             print(empty.format(name), file=err)
             return 1

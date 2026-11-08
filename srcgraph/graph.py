@@ -22,16 +22,16 @@ _REF_PAIRS = [("Symbol", "Symbol"), ("Symbol", "Unit"), ("Unit", "Symbol"), ("Un
 # label -> (from/to pairs, extra property columns)
 REL_TABLES = {
     "CONTAINS": ([("Unit", "Unit"), ("Unit", "Symbol"), ("Symbol", "Symbol")], ["line"]),
-    "IMPORTS": ([("Unit", "Unit")], ["line"]),
+    "IMPORTS": ([("Unit", "Unit")], ["line", "guard"]),
     "CALLS": ([("Symbol", "Symbol"), ("Unit", "Symbol")], ["line", "guard"]),
-    "REFERENCES": (_REF_PAIRS, ["line"]),
+    "REFERENCES": (_REF_PAIRS, ["line", "guard"]),
     "INHERITS": ([("Symbol", "Symbol")], ["line"]),
     "DECORATES": ([("Symbol", "Symbol")], ["line"]),
     "DERIVED_FROM": ([("Unit", "Ast"), ("Symbol", "Ast")], []),
-    "CHILD": ([("Ast", "Ast")], ["field"]),
+    "CHILD": ([("Ast", "Ast")], []),
     "NEXT": ([("Ast", "Ast")], []),
 }
-_PROP_TYPES = {"line": "INT64", "field": "STRING", "guard": "STRING"}
+_PROP_TYPES = {"line": "INT64", "guard": "STRING"}
 
 
 def escape(s: str) -> str:
@@ -118,10 +118,8 @@ class Graph:
             self._table_of[row["id"]] = table
         self._copy(table, f"{table}.csv", [[row[c] for c in cols] for row in rows])
 
-    def load_edges(self, edges: list[Edge], props: dict[tuple[str, str, str], dict] | None = None) -> None:
-        """Edges whose endpoints are not loaded nodes are dropped. `props` supplies property values other
-        than `line` (which comes from the Edge), keyed by (label, src, dst)."""
-        props = props or {}
+    def load_edges(self, edges: list[Edge]) -> None:
+        """Edges whose endpoints are not loaded nodes are dropped."""
         unknown = {i for e in edges for i in (e.src, e.dst) if i not in self._table_of}
         if unknown:
             for row in self.query("MATCH (n) WHERE n.id IN $ids RETURN n.id AS id, label(n) AS t", {"ids": sorted(unknown)}):
@@ -131,9 +129,8 @@ class Graph:
             src, dst = self._table_of.get(e.src), self._table_of.get(e.dst)
             pairs, labels = self.rel_tables[e.label]
             if src and dst and (src, dst) in pairs:
-                extra = props.get((e.label, e.src, e.dst), {})
                 own = {"line": e.line, "guard": e.guard}
-                grouped[(e.label, src, dst)].append([e.src, e.dst, *[own[p] if p in own else extra.get(p, "") for p in labels]])
+                grouped[(e.label, src, dst)].append([e.src, e.dst, *[own.get(p, "") for p in labels]])
         for (label, src, dst), rows in grouped.items():
             self._copy(label, f"{label}_{src}_{dst}.csv", rows, f" (from='{src}', to='{dst}')")
 
@@ -141,9 +138,7 @@ class Graph:
         self.load_nodes("Unit", [{**vars(u), "line": 1} for u in result.units])
         self.load_nodes("Symbol", [vars(s) for s in result.symbols])
         self.load_nodes("Ast", [vars(a) for a in result.ast])
-        field = {a.id: a.field for a in result.ast}
-        props = {("CHILD", e.src, e.dst): {"field": field.get(e.dst, "")} for e in result.ast_edges if e.label == "CHILD"}
-        self.load_edges(list(result.edges) + list(result.ast_edges), props)
+        self.load_edges(list(result.edges) + list(result.ast_edges))
 
     def close(self) -> None:
         self._conn.close()
