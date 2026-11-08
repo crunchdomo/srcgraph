@@ -35,7 +35,9 @@ PRESETS = {
              # dead: the graph has no types, so that is the best it can say
              "MATCH (u:Unit)-[:CONTAINS*1..3]->(s:Symbol) WHERE NOT u.test AND s.kind IN ['function', 'method', 'class'] "
              "AND NOT s.entry AND NOT s.name STARTS WITH '__' "
-             "OPTIONAL MATCH ()-[r:CALLS|REFERENCES|INHERITS|DECORATES]->(s) WITH s, count(r) AS n WHERE n = 0 "
+             "OPTIONAL MATCH ()-[r:CALLS|REFERENCES|INHERITS|DECORATES]->(s) WITH u, s, count(r) AS n WHERE n = 0 "
+             # a module something reads through getattr is a registry: its public names are looked up, not called
+             "OPTIONAL MATCH ()-[g:REFERENCES]->(u) WITH s, count(g) AS reg WHERE reg = 0 OR s.name STARTS WITH '_' "
              # decorated: a framework registered it (routes, tasks, signals); DECORATES points from the symbol to the decorator
              "OPTIONAL MATCH (s)-[d:DECORATES]->() WITH s, count(d) AS deco WHERE deco = 0 "
              # a method on a subclass of something external overrides a hook the framework calls (paintEvent, handle_data)

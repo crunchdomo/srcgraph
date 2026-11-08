@@ -228,3 +228,10 @@ def test_scanning_a_package_directly_warns(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert any("is itself a package" in w for w in scan(["pkg"]).warnings)
     assert not any("is itself a package" in w for w in scan(["."]).warnings)
+
+
+def test_getattr_on_a_module_references_the_unit(repo):
+    # getattr(c, name) reads src.contracts.c as a registry: a REFERENCES edge from the caller to the unit, nothing unresolved
+    assert any(e.label == "REFERENCES" and e.src == "src/handlers/h.py::src.handlers.h.dispatch" and e.dst == "src/contracts/c.py"
+               for e in repo.edges)
+    assert not any(s.kind == "unresolved" and s.name.endswith(".c") for s in repo.symbols)

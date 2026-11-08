@@ -184,6 +184,10 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
                 name = _dotted(child.child_by_field_name("function"))
                 head, _, method = name.partition(".") if name else ("", "", "")
                 args = child.child_by_field_name("arguments")
+                if name == "getattr" and args is not None and args.named_children and args.named_children[0].type == "identifier":
+                    mod = _text(args.named_children[0])
+                    if mod not in ("self", "cls") and not is_local(mod):
+                        ex.refs.append(RawRef(owner, mod, lines.line(child.start_byte), "reads"))
                 if head in ("self", "cls"):
                     # self.m() resolves to the enclosing class's own m; self.attr.m() needs the attribute's type, so it is dropped
                     if classes and method and "." not in method:

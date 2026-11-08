@@ -48,7 +48,8 @@ def test_unit_and_symbols():
     assert e.units[0].name == "src.contracts.c" and e.units[0].kind == "module"
     assert {(s.qualified, s.kind) for s in e.symbols} == {
         ("src.contracts.c.Contract", "class"), ("src.contracts.c.Contract.send", "method"),
-        ("src.contracts.c.call", "function"), ("src.contracts.c.warm", "function")}
+        ("src.contracts.c.call", "function"), ("src.contracts.c.warm", "function"),
+        ("src.contracts.c.plug", "function"), ("src.contracts.c._hidden", "function")}
     send = next(s for s in e.symbols if s.name == "send")
     assert send.id == "src/contracts/c.py::src.contracts.c.Contract.send" and send.line == 4 and send.ast_kind == "function_definition"
     assert ("CONTAINS", "src/contracts/c.py::src.contracts.c.Contract", send.id) in {(d.label, d.src, d.dst) for d in e.edges}
@@ -68,7 +69,8 @@ def test_calls_including_module_scope():
     e = ex("src/handlers/h.py")
     assert {(r.src_id, r.name) for r in e.refs} == {
         ("src/handlers/h.py::src.handlers.h.view", "c.call"), ("src/handlers/h.py::src.handlers.h.view", "logging.info"),
-        ("src/handlers/h.py::src.handlers.h.leak", "db_run"), ("src/handlers/h.py", "c.warm")}
+        ("src/handlers/h.py::src.handlers.h.leak", "db_run"), ("src/handlers/h.py", "c.warm"),
+        ("src/handlers/h.py::src.handlers.h.dispatch", "getattr"), ("src/handlers/h.py::src.handlers.h.dispatch", "c")}
 
 
 def test_syntax_error_does_not_crash():
@@ -217,3 +219,10 @@ def test_bare_names_used_as_values_or_annotations_are_name_refs():
     names = [(r.src_id, r.name) for r in e.refs if r.relation == "names"]
     assert names == [("m.py", "g"), ("m.py::m.h", "Thing"), ("m.py::m.h", "g"), ("m.py::m.h", "Thing"), ("m.py", "g")]
     # fn, x, y are parameters; count is being assigned; the keyword name fn is not a value
+
+
+def test_getattr_on_a_bare_name_reads_it_as_a_registry():
+    e = _src("import plugins\n\nclass K:\n    def go(self, n, local):\n        getattr(self, n)\n        getattr(local, n)\n"
+             "        return getattr(plugins, n)()\n")
+    reads = [(r.src_id, r.name) for r in e.refs if r.relation == "reads"]
+    assert reads == [("m.py::m.K.go", "plugins")]   # self and a parameter are not registries

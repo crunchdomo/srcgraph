@@ -188,6 +188,11 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
                 amap = aliases.get(src_unit.id, {})
                 base = amap[head] if head in amap else f"{src_unit.name}.{head}"
                 qualified = f"{base}{dot}{rest}"
+                if ref.relation == "reads":   # getattr(module, name): the module is a registry; a wire to the unit, or nothing
+                    uid = unit_for(qualified)
+                    if uid is not None:
+                        res.edges.append(Edge("REFERENCES", ref.src_id, uid, line=ref.line))
+                    continue
                 if ref.relation == "names":
                     sid = by_qualified.get((lang, "", qualified))
                     if sid is None:   # not a scanned symbol: a local, a builtin or an unknown; no node for it

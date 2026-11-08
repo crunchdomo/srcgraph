@@ -9,3 +9,7 @@ def call(req):
 
 def warm():
     pass
+
+def plug(): pass
+
+def _hidden(): pass
