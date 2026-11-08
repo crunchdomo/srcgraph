@@ -187,6 +187,20 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
                 if other.kind in ("module", "package") and other.name.rpartition(".")[0] == u.name:
                     res.edges.append(Edge("CONTAINS", u.id, other.id))
 
+    def resolve(qualified: str, hops: int = 3) -> str | None:
+        """A Python symbol by qualified name, following `from .m import name` in the package the name is read from."""
+        sid = by_qualified.get(("python", "", qualified))
+        if sid is not None or not hops:
+            return sid
+        parts = qualified.split(".")
+        for i in range(len(parts) - 1, 0, -1):   # longest scanned unit prefix first
+            uid = unit_for(".".join(parts[:i]))
+            if uid is not None:
+                alias = aliases.get(uid, {}).get(parts[i])
+                # ponytail: three hops cover a facade over a facade; an __all__ built at runtime stays invisible
+                return resolve(".".join([alias, *parts[i + 1:]]), hops - 1) if alias else None
+        return None
+
     entry_ids: set[str] = set()
     for ex in extractions:
         for ref in ex.refs:
@@ -198,7 +212,7 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
                 base = amap[head] if head in amap else f"{src_unit.name}.{head}"
                 qualified = f"{base}{dot}{rest}"
                 if ref.relation == "names":
-                    sid = by_qualified.get((lang, "", qualified))
+                    sid = resolve(qualified)
                     if sid is None:   # not a scanned symbol: a local, a builtin or an unknown; no node for it
                         continue
                     if symbols[sid].kind == "variable" and symbols[sid].path == src_unit.path:
@@ -209,7 +223,8 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
                     continue
             else:
                 qualified = ref.name
-            target = by_qualified.get((lang, scope(lang, src_unit.path), qualified)) or unresolved(qualified, lang)
+            target = (resolve(qualified) if lang == "python" else by_qualified.get((lang, scope(lang, src_unit.path), qualified))
+                      ) or unresolved(qualified, lang)
             res.edges.append(Edge(REF_RELATIONS[ref.relation], ref.src_id, target, line=ref.line, guard=ref.guard))
             if ref.relation == "calls" and (ref.entry or src_unit.test):
                 entry_ids.add(target)

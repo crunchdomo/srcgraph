@@ -228,3 +228,10 @@ def test_scanning_a_package_directly_warns(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert any("is itself a package" in w for w in scan(["pkg"]).warnings)
     assert not any("is itself a package" in w for w in scan(["."]).warnings)
+
+
+def test_from_package_import_follows_the_init_reexport(repo):
+    # contracts/__init__.py says `from .c import warm as warm`, so `from src.contracts import warm` is c.warm
+    e = {(d.label, d.src, d.dst) for d in repo.edges}
+    assert ("CALLS", "tests/uses_call.py::tests.uses_call.test_call", "src/contracts/c.py::src.contracts.c.warm") in e
+    assert "unresolved::src.contracts.warm" not in {s.id for s in repo.symbols}
