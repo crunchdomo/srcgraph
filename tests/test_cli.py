@@ -163,3 +163,25 @@ def test_empty_callers_points_at_visibility(built, capsys):
     assert code == 1 and out == "" and "visibility" in err
     code, out, _ = run(capsys, "visibility", "--db", built)
     assert code == 0 and out.splitlines()[0] == "path\tresolved\tunresolved"
+DOMAINS = ["handlers=src/handlers/**", "contracts=src/contracts/**", "db=src/db/**", "gateway=src/gateway/**"]
+
+
+def test_domains_rolls_wires_up_to_named_groups_and_lists_the_crossings(built, capsys):
+    code, out, _ = run(capsys, "domains", "--db", built, *DOMAINS)
+    assert code == 0
+    matrix, crossings = out.split("== crossings")
+    assert matrix.splitlines()[0] == "from\tto\tedges"
+    assert any(line.startswith("handlers\tcontracts\t") for line in matrix.splitlines())
+    assert "handlers\tcontracts\tsrc.handlers.h.view\tCALLS\tsrc.contracts.c.call\t6" in crossings
+    assert "contracts\tgateway\tsrc.contracts.c.Contract.send\tCALLS\tsrc.gateway.client.post\t5" in crossings
+    assert "contracts\tcontracts" not in out   # internal wires are not crossings
+
+
+def test_domains_json_bad_spec_and_no_match(built, capsys):
+    import json
+    code, out, _ = run(capsys, "domains", "--db", built, "--format", "json", *DOMAINS)
+    assert code == 0 and set(json.loads(out)) == {"matrix", "crossings"}
+    code, _, err = run(capsys, "domains", "--db", built, "nothing/**")
+    assert code == 2 and "name=glob" in err
+    code, out, err = run(capsys, "domains", "--db", built, "x=nowhere/**")
+    assert code == 1 and out == "" and "no domain matches" in err

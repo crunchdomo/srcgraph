@@ -27,6 +27,7 @@ srcgraph query "MATCH (a:Ast {norm:'Decorator'}) RETURN a.text, count(*) ORDER B
 srcgraph importers PySide6                       # every unit importing PySide6 or a submodule, with lines
 srcgraph callers get_tyre_compound_int           # who calls it, by name or qualified name, with lines
 srcgraph scope 'src/gui/**'                      # one compartment: its files, internal wiring, outbound and inbound wires (--no-tests)
+srcgraph domains api='src/api/**' billing='src/billing/**' orders='src/orders/**'   # who leans on whom, and every crossing edge
 srcgraph dead                                    # symbols nothing reaches and that are not entry points: deletion candidates
 srcgraph hubs                                    # most distinct neighbours in and out: what you must not break, and what does too much
 srcgraph untested                                # symbols no test reaches through calls
@@ -36,6 +37,8 @@ srcgraph trace tests/lib/test_time.py::test_format_time_valid_values   # same, f
 ```
 
 `scope` is the airplane view: pick a compartment by path and see what stays in the room, what the room controls, and what controls it. The header lists every file in the compartment with its doc line; a blank doc is an undocumented file. `--no-tests` hides wires that touch a test unit, leaving the real consumers.
+
+`domains` is the same view for a repo with several bounded contexts in it: name each domain with a path glob and the wires roll up to a from/to/edges matrix, followed by every crossing edge with its source, label, target and line. Wires inside a domain and paths that match no domain are left out, so the output is exactly the coupling between the parts you named. On the test fixture, `handlers=src/handlers/** contracts=src/contracts/** db=src/db/** gateway=src/gateway/**` gives three pairs (handlers→contracts 3, contracts→gateway 2, handlers→db 2) and seven crossings. Nothing says "a domain may not do that": `adrgraph` is where the rules live, this is the evidence.
 
 The presets answer the common questions without Cypher; `--format json` works on all of them and they exit 1 when nothing matches. `dead`, `hubs` and `untested` are the structure questions: where to look first when tidying a codebase. They name candidates, not verdicts, since `getattr`, registries and plugins are invisible to a static graph. `dead` keeps a method only when nothing anywhere calls `.name` on an instance, because the graph has no types to say which class an instance is. It also skips decorated symbols (routes, tasks, signal handlers are registered, not called) and every method on a class that inherits from something outside the repo, since those are usually hooks the framework calls (`paintEvent`, `handle_data`). `hubs` counts distinct neighbours, so a script that calls one helper forty times is not a hub. `untested` refuses to run when the graph has no test units. `visibility` is the caveat on all of them: per file, how many calls landed on a scanned symbol and how many went to something the graph cannot see. The biggest blind spot is a method called on anything other than `self` or a module (`request.getfixturevalue(...)`): without types there is no target, so no edge is recorded at all, and `callers` of such a method says nothing calls it. Read an empty answer next to the file's `visibility` row before believing it.
 
