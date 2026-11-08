@@ -203,3 +203,28 @@ def test_bare_name_references_resolve_or_vanish(repo):
     assert ("REFERENCES", "src/boom.py::src.boom.passer", "src/boom.py::src.boom.by_name") in e   # passed as a value
     assert ("REFERENCES", "src/views.py::src.views.typed", "src/views.py::src.views.Plain") in e   # annotation
     assert "unresolved::src.boom.err" not in {s.id for s in repo.symbols}   # an unknown bare name leaves no node
+
+
+def test_gitignored_root_falls_back_to_the_directory_walk(tmp_path, monkeypatch):
+    import subprocess
+    (tmp_path / "vendor" / "pkg").mkdir(parents=True)
+    (tmp_path / "vendor" / "pkg" / "a.py").write_text("x = 1\n")
+    (tmp_path / ".gitignore").write_text("vendor/\n")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    monkeypatch.chdir(tmp_path)
+    # the user pointed at the ignored directory on purpose: git lists nothing there, so walk it
+    assert [u.id for u in scan(["vendor/pkg"]).units] == ["vendor/pkg/a.py"]
+
+
+def test_empty_scan_warns(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert any("no source files" in w for w in scan(["."]).warnings)
+
+
+def test_scanning_a_package_directly_warns(tmp_path, monkeypatch):
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "__init__.py").write_text("")
+    (tmp_path / "pkg" / "a.py").write_text("from pkg import b\n")
+    monkeypatch.chdir(tmp_path)
+    assert any("is itself a package" in w for w in scan(["pkg"]).warnings)
+    assert not any("is itself a package" in w for w in scan(["."]).warnings)

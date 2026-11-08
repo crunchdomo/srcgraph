@@ -23,7 +23,8 @@ PRESETS = {
     "importers": ("units that import a module or any of its submodules", "no importers of {}",
                   "MATCH (u:Unit)-[i:IMPORTS]->(v:Unit) WHERE v.name = $name OR v.name STARTS WITH $prefix "
                   "RETURN u.path AS importer, i.line AS line, v.name AS module ORDER BY importer, line"),
-    "callers": ("symbols and units that call a symbol, by name or qualified name", "no callers of {}",
+    "callers": ("symbols and units that call a symbol, by name or qualified name",
+                "no callers of {} (calls the graph could not resolve do not count: see `srcgraph visibility`)",
                 "MATCH (c)-[r:CALLS]->(s:Symbol) WHERE s.name = $name OR s.qualified = $name "
                 "RETURN coalesce(c.qualified, c.path) AS caller, r.line AS line, s.qualified AS target, r.guard AS guard ORDER BY caller, line"),
     "dead": ("symbols nothing calls, references, inherits or decorates, and that are not entry points (candidates: "
@@ -49,6 +50,10 @@ PRESETS = {
              f"OPTIONAL MATCH (n)-[:{WIRES}]->(b) WHERE NOT b.kind IN ['unresolved', 'builtin'] "
              "WITH n, fan_in, count(DISTINCT b) AS fan_out WHERE fan_in + fan_out > 0 "
              "RETURN coalesce(n.qualified, n.path) AS node, fan_in, fan_out ORDER BY fan_in + fan_out DESC, node LIMIT 30"),
+    "visibility": ("per unit, calls that resolved to a scanned symbol or builtin vs calls to targets the graph cannot see; "
+                   "read the other answers against this", "no calls at all",
+                   "MATCH (a)-[:CALLS]->(t) WITH a.path AS path, CASE WHEN t.kind IN ['unresolved', 'external'] THEN 1 END AS miss "
+                   "RETURN path, count(*) - count(miss) AS resolved, count(miss) AS unresolved ORDER BY unresolved DESC, path"),
     "untested": ("symbols no test unit reaches through calls (up to six hops)", "everything is reached from a test",
                  # ponytail: 6-hop expansion from every test unit; precompute a reached set if a big repo makes this slow
                  "MATCH (u:Unit)-[:CONTAINS*1..3]->(s:Symbol) WHERE NOT u.test AND s.kind IN ['function', 'method', 'class'] "

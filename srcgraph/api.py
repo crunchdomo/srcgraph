@@ -1,6 +1,7 @@
 """The library front door: `srcgraph.load(root)` gives a Repo whose methods return the rows the CLI prints."""
 import contextlib
 import os
+import sys
 
 from srcgraph.cli import DB, PRESETS, build, scope as _scope, trace as _trace
 from srcgraph.graph import Graph
@@ -12,8 +13,8 @@ class Repo:
     The preset methods (dead, hubs, untested, callers(name), importers(module)) are attached below from PRESETS,
     so the CLI and the library cannot disagree."""
 
-    def __init__(self, graph: Graph, db: str, root: str = "."):
-        self.graph, self.db, self.root = graph, db, root
+    def __init__(self, graph: Graph, db: str, root: str = ".", warnings: list[str] = ()):
+        self.graph, self.db, self.root, self.warnings = graph, db, root, list(warnings)
 
     def query(self, cypher: str, params: dict | None = None) -> list[dict]:
         return self.graph.query(cypher, params)
@@ -56,9 +57,12 @@ def load(root: str = ".", db: str | None = None, src: list[str] | None = None,
     db defaults to <root>/.srcgraph/graph.lbug; src lists source roots relative to root (default the root itself)."""
     root = os.path.abspath(root)
     db = os.path.abspath(db) if db else os.path.join(root, DB)
+    warnings: list[str] = []
     if rebuild or not os.path.exists(db):
         with contextlib.chdir(root):   # ponytail: process-wide cwd switch for the scan; paths in the graph are root-relative
-            graph, _ = build(src or ["."], excludes, db)
+            graph, warnings = build(src or ["."], excludes, db)
+        for w in warnings:   # same line the CLI prints; the list is also kept on repo.warnings
+            print(f"warning: {w}", file=sys.stderr)
     else:
         graph = Graph.open(db)
-    return Repo(graph, db, root)
+    return Repo(graph, db, root, warnings)
