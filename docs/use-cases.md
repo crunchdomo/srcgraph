@@ -35,7 +35,26 @@ src/flask/globals.py              17      15
 ```
 
 `cli.py` and `app.py` do the most; `Flask`, `Blueprint` and `render_template` are what everything
-else holds on to, most of it the test suite. The one directory with its own README is
+else holds on to, most of it the test suite. `--no-tests` leaves the tests out as nodes and as
+neighbours, and the answer to "what must I not break" inside the package is different:
+
+```
+$ srcgraph hubs --no-tests
+node                          fan_in  fan_out
+src/flask/cli.py              4       41
+src/flask/app.py              6       38
+flask.app.Flask               31      5
+src/flask/sansio/app.py       7       28
+src/flask/sansio/scaffold.py  5       23
+src/flask/globals.py          12      15
+flask.ctx.AppContext          25      0
+flask.sansio.app.App          12      11
+…
+```
+
+`Flask` keeps 31 of its 125 neighbours, `Blueprint` and `render_template` drop off the list, and
+`AppContext` with 25 production callers and no outbound wire is the one to be careful with. The one
+directory with its own README is
 `src/flask/sansio/`, and the README states a rule: the code there may do no IO and may not use the
 Flask globals, so that Quart can reuse it. `domains` is how you check a rule like that against the
 code:
