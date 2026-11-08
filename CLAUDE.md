@@ -8,9 +8,9 @@ Source code in, a queryable two-tier knowledge graph out. The engine under adrgr
   package (`srcgraph>=0.2,<0.3`) through the schema-extension API in `srcgraph/graph.py` and must never be
   imported here (ADR-0001, enforced by `adrgraph check` on this repo).
 - Design history lives in adrgraph's repo under `docs/superpowers/specs/` and `docs/superpowers/plans/`:
-  milestone 1 (enforcer), milestone 2 (two-tier graph), milestone 3 (this split + provenance). The next
-  planned piece for this repo is the explorer (`srcgraph serve`), designed in
-  `2026-11-06-srcgraph-split-and-provenance-design.md` under "Decided: the explorer".
+  milestone 1 (enforcer), milestone 2 (two-tier graph), milestone 3 (this split + provenance). The explorer
+  (`srcgraph serve`) from `2026-11-06-srcgraph-split-and-provenance-design.md` has shipped; new work is
+  filed as GitHub issues, nothing is pre-planned beyond them.
 - Dev setup: `python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'`; `pytest`. `~/Documents` is
   iCloud-synced, which sometimes hides editable `.pth` files; if `import srcgraph` fails outside pytest,
   `chflags nohidden .venv/lib/python3.*/site-packages/*.pth`.
