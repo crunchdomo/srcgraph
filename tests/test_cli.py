@@ -158,11 +158,12 @@ def test_callers_and_scope_show_the_guard_column(built, capsys):
     assert "src.boom.boom\tCALLS\tsrc.boom.inner\t2\t" in out.splitlines()
 
 
-def test_empty_callers_points_at_visibility(built, capsys):
+def test_empty_callers_says_how_much_the_graph_sees(built, capsys):
     code, out, err = run(capsys, "callers", "--db", built, "nothing_calls_this")
-    assert code == 1 and out == "" and "visibility" in err
-    code, out, _ = run(capsys, "visibility", "--db", built)
-    assert code == 0 and out.splitlines()[0] == "path\tresolved\tunresolved"
+    assert code == 1 and out == "" and "no callers of nothing_calls_this" in err
+    assert "calls resolved" in err and "self" in err   # the error bar and the blind spot, only when the answer is empty
+    with pytest.raises(SystemExit):   # the standalone table is gone
+        main(["visibility", "--db", built])
 DOMAINS = ["handlers=src/handlers/**", "contracts=src/contracts/**", "db=src/db/**", "gateway=src/gateway/**"]
 
 
