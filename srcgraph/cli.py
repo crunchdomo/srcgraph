@@ -2,16 +2,18 @@
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+from collections import Counter
 from datetime import datetime
 
 from srcgraph import __version__, tracer
 from srcgraph.graph import Graph
 from srcgraph.scan import DEFAULT_EXCLUDES, scan
-from srcgraph.selectors import SelectorError, compile_selector
+from srcgraph.selectors import SelectorError, compile_selector, glob_to_regex
 from srcgraph.serve import make_server
 from srcgraph.source import Source
 
@@ -98,6 +100,9 @@ def _parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("scope", help="one compartment: its files with doc lines, internal wiring, outbound and inbound wires")
     ro(sp, "glob", "path glob for the compartment, e.g. 'src/gui/**'")
     sp.add_argument("--no-tests", action="store_true", help="hide wires that touch a test unit")
+    sp = sub.add_parser("domains", help="wires rolled up between named groups of paths, and every edge that crosses between them")
+    ro(sp)
+    sp.add_argument("spec", nargs="+", help="name=glob, e.g. billing='src/billing/**'")
     ro(sub.add_parser("trace", help="run an expression in the interpreter on PATH and print the calls it makes through the graph"),
        "expr", "python expression, e.g. 'pkg.mod.f(1)', or a pytest node id like tests/test_x.py::test_y; activate the target's venv first")
     return p
@@ -126,6 +131,25 @@ def scope(graph: Graph, glob: str, no_tests: bool = False) -> tuple[int, dict[st
         "outbound": edges(f"({a}) AND NOT ({b})"),
         "inbound": edges(f"NOT ({a}) AND ({b})"),
     }
+
+
+def domains(graph: Graph, mapping: dict[str, str]) -> dict[str, list[dict]]:
+    """Wires rolled up between named groups of paths, plus every edge that crosses from one group to another.
+    A path matching no group is ignored. Returns {"matrix", "crossings"}."""
+    groups = [(name, re.compile(glob_to_regex(glob))) for name, glob in mapping.items()]
+
+    def group(path: str | None) -> str | None:
+        return next((n for n, g in groups if path and g.fullmatch(path)), None)
+
+    # ponytail: one query for every wire, classified in Python; a per-pair Cypher count if a graph makes this slow
+    rows = graph.query(f"MATCH (a)-[r:{WIRES}]->(b) WHERE label(a) <> 'Ast' AND NOT b.kind IN ['unresolved', 'builtin'] "
+                       "RETURN a.path AS ap, coalesce(a.qualified, a.path) AS source, label(r) AS label, "
+                       "b.path AS bp, coalesce(b.qualified, b.name) AS target, r.line AS line")
+    crossings = sorted(({"from": fa, "to": fb, "source": r["source"], "label": r["label"], "target": r["target"], "line": r["line"]}
+                        for r in rows if (fa := group(r["ap"])) and (fb := group(r["bp"])) and fa != fb),
+                       key=lambda c: (c["from"], c["to"], c["source"], c["line"] or 0))
+    matrix = [{"from": f, "to": t, "edges": n} for (f, t), n in Counter((c["from"], c["to"]) for c in crossings).most_common()]
+    return {"matrix": matrix, "crossings": crossings}
 
 
 def traces_dir(db: str) -> str:
@@ -229,6 +253,21 @@ def _run(args, out, err) -> int:
         for name in ("internal", "outbound", "inbound"):
             print(f"== {name} ({len(sections[name])})", file=out)
             _print(sections[name], "text", out)
+        return 0
+    if args.command == "domains":
+        if not all("=" in s for s in args.spec):
+            print("error: domains take name=glob pairs", file=err)
+            return 2
+        with Graph.open(args.db) as graph:
+            sections = domains(graph, dict(s.split("=", 1) for s in args.spec))
+        if not sections["crossings"]:
+            print("no wires cross between those domains", file=err)
+            return 1
+        if args.format == "json":
+            return _print(sections, "json", out)
+        _print(sections["matrix"], "text", out)
+        print(f"== crossings ({len(sections['crossings'])})", file=out)
+        _print(sections["crossings"], "text", out)
         return 0
     if args.command == "trace":
         with Graph.open(args.db) as graph:

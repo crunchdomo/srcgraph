@@ -3,7 +3,7 @@ import contextlib
 import os
 import sys
 
-from srcgraph.cli import DB, PRESETS, build, scope as _scope, trace as _trace
+from srcgraph.cli import DB, PRESETS, build, domains as _domains, scope as _scope, trace as _trace
 from srcgraph.graph import Graph
 from srcgraph.scan import DEFAULT_EXCLUDES
 
@@ -21,6 +21,9 @@ class Repo:
 
     def scope(self, glob: str, no_tests: bool = False) -> dict[str, list[dict]]:
         return _scope(self.graph, glob, no_tests)[1]
+
+    def domains(self, mapping: dict[str, str]) -> dict[str, list[dict]]:
+        return _domains(self.graph, mapping)
 
     def trace(self, expr: str) -> list[dict]:
         with contextlib.chdir(self.root):   # symbol paths are relative to the root; the tracer imports from cwd
