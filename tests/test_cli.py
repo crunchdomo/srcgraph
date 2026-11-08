@@ -210,3 +210,11 @@ def test_scope_and_domains_can_hide_typing_only_wires(built, capsys):
     assert "other\tcontracts\tsrc/other/typed.py\tIMPORTS\tsrc.contracts.c\t5" in out
     code, out, err = run(capsys, "domains", "--db", built, "--no-typing", "other=src/other/**", "contracts=src/contracts/**")
     assert code == 1 and "no wires cross" in out + err
+
+
+def test_hubs_no_tests_counts_production_neighbours_only(built, capsys):
+    _, out, _ = run(capsys, "hubs", "--db", built)
+    assert "src.contracts.c.call\t3\t1" in out.splitlines()   # h.view plus two test functions
+    code, out, _ = run(capsys, "hubs", "--db", built, "--no-tests")
+    assert code == 0 and "src.contracts.c.call\t1\t1" in out.splitlines()
+    assert not any(l.startswith("tests/") for l in out.splitlines())

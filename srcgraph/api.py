@@ -43,6 +43,9 @@ def _preset(name: str, cypher: str):
     if "$name" in cypher:
         def method(self, name_: str) -> list[dict]:
             return self.graph.query(cypher, {"name": name_, "prefix": name_ + "."})
+    elif "$tests" in cypher:
+        def method(self, no_tests: bool = False) -> list[dict]:
+            return self.graph.query(cypher, {"tests": not no_tests})
     else:
         def method(self) -> list[dict]:
             return self.graph.query(cypher)
