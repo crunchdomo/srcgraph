@@ -101,9 +101,8 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
     index: dict[str, list[str]] = {}
     for root in roots:
         if os.path.isfile(os.path.join(root, "__init__.py")):
-            res.warnings.append(f"'{root}' is itself a package: modules will be named without the "
-                                f"'{os.path.basename(os.path.abspath(root))}.' prefix and its absolute self-imports "
-                                f"will not resolve; scan the directory that contains it instead")
+            res.warnings.append(f"'{root}' is itself a package: scan the directory that contains it, or its modules lose "
+                                f"the package prefix and their absolute self-imports go unresolved")
     files = _walk(roots, excludes)
     if not files:
         res.warnings.append(f"no source files found under {', '.join(roots)}")

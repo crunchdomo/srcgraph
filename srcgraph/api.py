@@ -57,11 +57,12 @@ def load(root: str = ".", db: str | None = None, src: list[str] | None = None,
     db defaults to <root>/.srcgraph/graph.lbug; src lists source roots relative to root (default the root itself)."""
     root = os.path.abspath(root)
     db = os.path.abspath(db) if db else os.path.join(root, DB)
+    warnings: list[str] = []
     if rebuild or not os.path.exists(db):
         with contextlib.chdir(root):   # ponytail: process-wide cwd switch for the scan; paths in the graph are root-relative
             graph, warnings = build(src or ["."], excludes, db)
         for w in warnings:   # same line the CLI prints; the list is also kept on repo.warnings
             print(f"warning: {w}", file=sys.stderr)
     else:
-        graph, warnings = Graph.open(db), []
+        graph = Graph.open(db)
     return Repo(graph, db, root, warnings)
