@@ -37,27 +37,18 @@ def _walk(roots: list[str], excludes: tuple[str, ...]) -> list[tuple[str, str]]:
             return True
         return any(g.fullmatch("/".join(parts[:i])) for i in range(1, len(parts) + 1) for g in paths)
 
-    found = []
-    for root in roots:
-        tracked = _git_files(root)
-        if tracked is not None:   # inside a git repo, git decides what is part of the project: .gitignore is honoured
-            for name in tracked:
-                full = os.path.join(root, name)
-                if os.path.splitext(name)[1] in EXTRACTORS and os.path.isfile(full) and not os.path.islink(full):
-                    rel = _rel(full)
-                    if not excluded(rel):
-                        found.append((root, rel))
-            continue
+    def walk(root: str):
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = sorted(d for d in dirnames
                                  if not os.path.islink(os.path.join(dirpath, d)) and not excluded(_rel(os.path.join(dirpath, d))))
-            for fn in sorted(filenames):
-                full = os.path.join(dirpath, fn)
-                if os.path.islink(full) or os.path.splitext(fn)[1] not in EXTRACTORS:
-                    continue
-                rel = _rel(full)
-                if not excluded(rel):
-                    found.append((root, rel))
+            yield from (os.path.join(dirpath, fn) for fn in sorted(filenames))
+
+    found = []
+    for root in roots:
+        tracked = _git_files(root)   # inside a git repo, git decides what is part of the project: .gitignore is honoured
+        for full in (os.path.join(root, n) for n in tracked) if tracked is not None else walk(root):
+            if os.path.splitext(full)[1] in EXTRACTORS and os.path.isfile(full) and not os.path.islink(full) and not excluded(_rel(full)):
+                found.append((root, _rel(full)))
     return found
 
 

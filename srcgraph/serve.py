@@ -19,10 +19,6 @@ class NotFound(Exception):
     pass
 
 
-class Forbidden(Exception):
-    pass
-
-
 def _node(d: dict) -> dict:
     return {**{k: v for k, v in d.items() if not k.startswith("_")}, "label": d["_LABEL"]}
 
@@ -80,16 +76,13 @@ class Explorer:
         rows = self.graph.query(f"MATCH (r:Ast)-[:CHILD*1..{depth}]->(c:Ast) WHERE r.id = $id RETURN DISTINCT c LIMIT 500", {"id": rid})
         nodes = {rid: _node(self.graph.query("MATCH (a:Ast) WHERE a.id = $id RETURN a", {"id": rid})[0]["a"])}
         nodes.update({r["c"]["id"]: _node(r["c"]) for r in rows})
-        edges = self.graph.query("MATCH (p:Ast)-[r:CHILD]->(c:Ast) WHERE p.id IN $ids AND c.id IN $ids "
-                                 "RETURN p.id AS src, c.id AS dst, r.field AS field", {"ids": list(nodes)})
+        edges = self.graph.query("MATCH (p:Ast)-[:CHILD]->(c:Ast) WHERE p.id IN $ids AND c.id IN $ids "
+                                 "RETURN p.id AS src, c.id AS dst, c.field AS field", {"ids": list(nodes)})
         return {"nodes": list(nodes.values()), "edges": [{"label": "CHILD", **e} for e in edges]}
 
     def source_lines(self, p: dict) -> dict:
         path = p["path"]
-        full = os.path.realpath(os.path.join(self.source.root, path))
-        if not full.startswith(self.source.root + os.sep):
-            raise Forbidden(path)
-        lines = self.source.lines(path)
+        lines = self.source.lines(path)   # None for a missing file and for a path outside the root alike
         if lines is None:
             raise NotFound(path)
         start, end = max(1, int(p.get("from", 1))), min(len(lines), int(p.get("to", len(lines))))
@@ -158,8 +151,6 @@ def make_server(graph: Graph, source: Source, port: int = 8765, routes: dict | N
                 self._send(200, json.dumps(fn(params), default=str).encode())
             except NotFound as exc:
                 self._send(404, json.dumps({"error": f"not found: {exc}"}).encode())
-            except Forbidden as exc:
-                self._send(403, json.dumps({"error": f"forbidden: {exc}"}).encode())
             except (KeyError, ValueError, RuntimeError) as exc:
                 self._send(400, json.dumps({"error": str(exc)}).encode())
 

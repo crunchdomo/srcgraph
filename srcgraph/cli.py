@@ -108,12 +108,11 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
-def scope(graph: Graph, glob: str, no_tests: bool = False) -> tuple[int, dict[str, list[dict]]]:
-    """What happens inside one compartment and what crosses its boundary. Returns (matched node count, sections)."""
+def scope(graph: Graph, glob: str, no_tests: bool = False) -> dict[str, list[dict]]:
+    """What happens inside one compartment and what crosses its boundary; every section empty when nothing matches."""
     a, pa = compile_selector({"path": glob}, "a", "a")
     b, pb = compile_selector({"path": glob}, "b", "b")
     params = {**pa, **pb}
-    matched = graph.query(f"MATCH (a) WHERE {a} RETURN count(*) AS c", params)[0]["c"]
     # a symbol's unit is the Unit with its path; --no-tests drops wires with a test unit at either end
     tests = ", (ua:Unit), (ub:Unit)" if no_tests else ""
     not_tests = " AND ua.path = a.path AND ub.path = b.path AND NOT ua.test AND NOT ub.test" if no_tests else ""
@@ -125,7 +124,7 @@ def scope(graph: Graph, glob: str, no_tests: bool = False) -> tuple[int, dict[st
                            f"RETURN coalesce(a.qualified, a.path) AS source, label(r) AS label, "
                            f"coalesce(b.qualified, b.name) AS target, r.line AS line, coalesce(r.guard, '') AS guard "
                            f"ORDER BY source, line, target", params)
-    return matched, {
+    return {
         "doc": graph.query(f"MATCH (a:Unit) WHERE {a} RETURN a.path AS path, a.doc AS doc ORDER BY path", params),
         "internal": edges(f"({a}) AND ({b})"),
         "outbound": edges(f"({a}) AND NOT ({b})"),
@@ -242,8 +241,8 @@ def _run(args, out, err) -> int:
         return 0
     if args.command == "scope":
         with Graph.open(args.db) as graph:
-            matched, sections = scope(graph, args.glob, args.no_tests)
-        if not matched:
+            sections = scope(graph, args.glob, args.no_tests)
+        if not any(sections.values()):
             print(f"nothing matches {args.glob}", file=err)
             return 1
         if args.format == "json":
