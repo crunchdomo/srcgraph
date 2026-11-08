@@ -185,3 +185,11 @@ def test_domains_json_bad_spec_and_no_match(built, capsys):
     assert code == 2 and "name=glob" in err
     code, out, err = run(capsys, "domains", "--db", built, "x=nowhere/**")
     assert code == 1 and out == "" and "no wires cross" in err
+
+
+def test_hubs_no_tests_counts_production_neighbours_only(built, capsys):
+    _, out, _ = run(capsys, "hubs", "--db", built)
+    assert "src.contracts.c.call\t3\t1" in out.splitlines()   # h.view plus two test functions
+    code, out, _ = run(capsys, "hubs", "--db", built, "--no-tests")
+    assert code == 0 and "src.contracts.c.call\t1\t1" in out.splitlines()
+    assert not any(l.startswith("tests/") for l in out.splitlines())

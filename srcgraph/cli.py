@@ -47,8 +47,11 @@ PRESETS = {
              "RETURN s.qualified AS symbol, s.path AS path, s.line AS line ORDER BY path, line"),
     "hubs": ("symbols and units with the most distinct neighbours in and out: what you must not break, and what does too much",
              "no wires at all",
-             f"MATCH (n:Symbol:Unit) WHERE NOT n.kind IN ['unresolved', 'builtin', 'external'] "
-             f"OPTIONAL MATCH (a)-[:{WIRES}]->(n) WITH n, count(DISTINCT a) AS fan_in "
+             # $tests false: test units are neither nodes nor neighbours, so a library's fan-in is not its test suite
+             f"MATCH (n:Symbol:Unit), (un:Unit) WHERE un.path = n.path AND NOT n.kind IN ['unresolved', 'builtin', 'external'] "
+             f"AND ($tests OR NOT un.test) "
+             f"OPTIONAL MATCH (a)-[:{WIRES}]->(n), (ua:Unit) WHERE ua.path = a.path AND ($tests OR NOT ua.test) "
+             f"WITH n, count(DISTINCT a) AS fan_in "
              f"OPTIONAL MATCH (n)-[:{WIRES}]->(b) WHERE NOT b.kind IN ['unresolved', 'builtin'] "
              "WITH n, fan_in, count(DISTINCT b) AS fan_out WHERE fan_in + fan_out > 0 "
              "RETURN coalesce(n.qualified, n.path) AS node, fan_in, fan_out ORDER BY fan_in + fan_out DESC, node LIMIT 30"),
@@ -97,6 +100,7 @@ def _parser() -> argparse.ArgumentParser:
     ro(sub.add_parser("query", help="run Cypher against the last built graph"), "cypher")
     for name, (help_, _, cypher) in PRESETS.items():
         ro(sub.add_parser(name, help=help_), "name" if "$name" in cypher else None)
+    sub.choices["hubs"].add_argument("--no-tests", action="store_true", help="leave test units out, as nodes and as neighbours")
     sp = sub.add_parser("scope", help="one compartment: its files with doc lines, internal wiring, outbound and inbound wires")
     ro(sp, "glob", "path glob for the compartment, e.g. 'src/gui/**'")
     sp.add_argument("--no-tests", action="store_true", help="hide wires that touch a test unit")
@@ -285,7 +289,8 @@ def _run(args, out, err) -> int:
             if args.command == "untested" and not repo.query("MATCH (u:Unit {test: true}) RETURN u.id LIMIT 1"):
                 print("no test units: nothing reaches anything", file=err)
                 return 1
-            rows = getattr(repo, args.command)(name) if name else getattr(repo, args.command)()
+            preset = getattr(repo, args.command)
+            rows = preset(name) if name else preset(no_tests=True) if getattr(args, "no_tests", False) else preset()
         if not rows:
             print(empty.format(name), file=err)
             return 1
