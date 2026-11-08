@@ -156,3 +156,10 @@ def test_callers_and_scope_show_the_guard_column(built, capsys):
     assert code == 0 and "== internal" in out
     assert "src.boom.loop\tCALLS\tsrc.boom.inner_ok\t12\tfor@11" in out.splitlines()
     assert "src.boom.boom\tCALLS\tsrc.boom.inner\t2\t" in out.splitlines()
+
+
+def test_empty_callers_points_at_visibility(built, capsys):
+    code, out, err = run(capsys, "callers", "--db", built, "nothing_calls_this")
+    assert code == 1 and out == "" and "visibility" in err
+    code, out, _ = run(capsys, "visibility", "--db", built)
+    assert code == 0 and out.splitlines()[0] == "path\tresolved\tunresolved"

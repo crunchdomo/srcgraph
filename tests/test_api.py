@@ -41,3 +41,14 @@ def test_load_reuses_an_existing_db_unless_rebuild(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "build", lambda *a: (_ for _ in ()).throw(RuntimeError("rebuild requested")))
     with pytest.raises(RuntimeError, match="rebuild requested"):
         srcgraph.load(ROOT, db=db, rebuild=True)
+
+
+def test_load_exposes_scan_warnings(tmp_path, capsys):
+    with srcgraph.load(str(tmp_path), db=str(tmp_path / "g.lbug")) as g:
+        assert any("no source files" in w for w in g.warnings)
+    assert "warning: no source files" in capsys.readouterr().err
+
+
+def test_visibility_counts_resolved_and_unresolved_calls_per_unit(repo):
+    rows = {r["path"]: r for r in repo.visibility()}
+    assert rows["src/handlers/h.py"]["resolved"] >= 2 and rows["src/handlers/h.py"]["unresolved"] >= 1

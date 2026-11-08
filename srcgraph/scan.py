@@ -68,7 +68,8 @@ def _git_files(root: str) -> list[str] | None:
                              capture_output=True, check=True).stdout
     except (OSError, subprocess.CalledProcessError):
         return None
-    return sorted(os.fsdecode(p) for p in out.split(b"\0") if p)
+    # nothing listed means the root itself is ignored (a vendored package, a venv): the user pointed at it, so walk it
+    return sorted(os.fsdecode(p) for p in out.split(b"\0") if p) or None
 
 
 def _absolute(imp: RawImport, importer: Unit) -> str:
@@ -98,7 +99,15 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
     res = Extraction()
     extractions: list[Extraction] = []
     index: dict[str, list[str]] = {}
-    for root, rel in _walk(roots, excludes):
+    for root in roots:
+        if os.path.isfile(os.path.join(root, "__init__.py")):
+            res.warnings.append(f"'{root}' is itself a package: modules will be named without the "
+                                f"'{os.path.basename(os.path.abspath(root))}.' prefix and its absolute self-imports "
+                                f"will not resolve; scan the directory that contains it instead")
+    files = _walk(roots, excludes)
+    if not files:
+        res.warnings.append(f"no source files found under {', '.join(roots)}")
+    for root, rel in files:
         rel_to_root = posixpath.relpath(rel, _rel(root))
         with open(rel, "rb") as fh:
             source = fh.read()
