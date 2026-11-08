@@ -228,3 +228,10 @@ def test_scanning_a_package_directly_warns(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert any("is itself a package" in w for w in scan(["pkg"]).warnings)
     assert not any("is itself a package" in w for w in scan(["."]).warnings)
+
+
+def test_type_checking_imports_and_their_annotations_carry_the_typing_guard(repo):
+    g = {(d.label, d.src, d.dst): d.guard for d in repo.edges}
+    assert g[("IMPORTS", "src/other/typed.py", "src/contracts/c.py")] == "typing"
+    assert g[("REFERENCES", "src/other/typed.py::src.other.typed.take", "src/contracts/c.py::src.contracts.c.Contract")] == "typing"
+    assert g[("IMPORTS", "src/handlers/h.py", "src/contracts/c.py")] == ""

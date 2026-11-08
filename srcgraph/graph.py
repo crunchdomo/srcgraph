@@ -22,9 +22,9 @@ _REF_PAIRS = [("Symbol", "Symbol"), ("Symbol", "Unit"), ("Unit", "Symbol"), ("Un
 # label -> (from/to pairs, extra property columns)
 REL_TABLES = {
     "CONTAINS": ([("Unit", "Unit"), ("Unit", "Symbol"), ("Symbol", "Symbol")], ["line"]),
-    "IMPORTS": ([("Unit", "Unit")], ["line"]),
+    "IMPORTS": ([("Unit", "Unit")], ["line", "guard"]),
     "CALLS": ([("Symbol", "Symbol"), ("Unit", "Symbol")], ["line", "guard"]),
-    "REFERENCES": (_REF_PAIRS, ["line"]),
+    "REFERENCES": (_REF_PAIRS, ["line", "guard"]),
     "INHERITS": ([("Symbol", "Symbol")], ["line"]),
     "DECORATES": ([("Symbol", "Symbol")], ["line"]),
     "DERIVED_FROM": ([("Unit", "Ast"), ("Symbol", "Ast")], []),

@@ -155,7 +155,8 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
         return sid
 
     aliases: dict[str, dict[str, str]] = {}
-    imports: set[tuple[str, str, int]] = set()   # (unit, target, line): `from m import a, b` is one wire, not two
+    imports: set[tuple[str, str, int, str]] = set()   # (unit, target, line, guard): `from m import a, b` is one wire, not two
+    typing_names: dict[str, set[str]] = {}   # unit -> names bound only under `if TYPE_CHECKING`
     for ex in extractions:
         for imp in ex.imports:
             importer = units[imp.unit_id]
@@ -168,17 +169,21 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
                     if target is None:
                         target = external(module or dotted, importer.lang)
                         _hint(res, index, module or dotted)
-                    imports.add((imp.unit_id, target, imp.line))
+                    imports.add((imp.unit_id, target, imp.line, imp.guard))
                     amap[alias] = dotted
+                    if imp.guard == "typing":
+                        typing_names.setdefault(imp.unit_id, set()).add(alias)
             else:
                 target = unit_for(module)
                 if target is None:
                     target = external(module, importer.lang)
                     _hint(res, index, module)
-                imports.add((imp.unit_id, target, imp.line))
+                imports.add((imp.unit_id, target, imp.line, imp.guard))
                 amap[imp.alias or module.split(".")[0]] = module if imp.alias else module.split(".")[0]
+                if imp.guard == "typing":
+                    typing_names.setdefault(imp.unit_id, set()).add(imp.alias or module.split(".")[0])
 
-    res.edges.extend(Edge("IMPORTS", s, d, line=l) for s, d, l in sorted(imports))
+    res.edges.extend(Edge("IMPORTS", s, d, line=l, guard=g) for s, d, l, g in sorted(imports))
 
     # package -> child CONTAINS by name prefix
     for u in list(units.values()):
@@ -192,9 +197,12 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
         for ref in ex.refs:
             src_unit = units[ref.src_id] if ref.src_id in units else units[symbols[ref.src_id].path]
             lang = src_unit.lang
+            guard = ref.guard
             if lang == "python":
                 head, dot, rest = ref.name.partition(".")
                 amap = aliases.get(src_unit.id, {})
+                if head in typing_names.get(src_unit.id, ()):   # an annotation naming a TYPE_CHECKING import is typing-only too
+                    guard = guard or "typing"
                 base = amap[head] if head in amap else f"{src_unit.name}.{head}"
                 qualified = f"{base}{dot}{rest}"
                 if ref.relation == "names":
@@ -205,12 +213,12 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
                         continue   # a module reading its own globals is not a wire worth drawing
                 if head not in amap and head in BUILTIN_NAMES and (lang, "", f"{src_unit.name}.{head}") not in by_qualified:
                     target = builtin(ref.name, lang)
-                    res.edges.append(Edge(REF_RELATIONS[ref.relation], ref.src_id, target, line=ref.line, guard=ref.guard))
+                    res.edges.append(Edge(REF_RELATIONS[ref.relation], ref.src_id, target, line=ref.line, guard=guard))
                     continue
             else:
                 qualified = ref.name
             target = by_qualified.get((lang, scope(lang, src_unit.path), qualified)) or unresolved(qualified, lang)
-            res.edges.append(Edge(REF_RELATIONS[ref.relation], ref.src_id, target, line=ref.line, guard=ref.guard))
+            res.edges.append(Edge(REF_RELATIONS[ref.relation], ref.src_id, target, line=ref.line, guard=guard))
             if ref.relation == "calls" and (ref.entry or src_unit.test):
                 entry_ids.add(target)
     for root in roots:  # console scripts declared in pyproject.toml: "pkg.mod:func"

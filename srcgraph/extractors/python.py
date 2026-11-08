@@ -1,6 +1,7 @@
 """Python extractor: tree-sitter AST -> shared vocabulary."""
 import posixpath
 import re
+from dataclasses import replace
 
 import tree_sitter_python
 from tree_sitter import Language, Node, Parser
@@ -152,9 +153,11 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
         for child in node.children:
             t = child.type
             if t in GUARDS:
-                guards.append(f"{GUARDS[t]}@{lines.line(child.start_byte)}")
+                cond = child.child_by_field_name("condition")
+                guards.append("typing" if t == "if_statement" and cond is not None and b"TYPE_CHECKING" in cond.text
+                              else f"{GUARDS[t]}@{lines.line(child.start_byte)}")
             if t in ("import_statement", "import_from_statement", "future_import_statement"):
-                ex.imports.extend(_imports(child, rel_path, lines))
+                ex.imports.extend(replace(i, guard=guard()) for i in _imports(child, rel_path, lines))
             elif t in ("function_definition", "class_definition") and not in_function:
                 define(child, scope, owner, in_class)
             elif t == "decorated_definition" and not in_function:
