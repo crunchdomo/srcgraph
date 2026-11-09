@@ -12,9 +12,9 @@ import ladybug
 from srcgraph.model import Edge, Extraction
 
 NODE_TABLES = {
-    "Unit": "id STRING, path STRING, name STRING, lang STRING, kind STRING, line INT64, doc STRING, test BOOLEAN, PRIMARY KEY(id)",
+    "Unit": "id STRING, path STRING, name STRING, lang STRING, kind STRING, line INT64, doc STRING, summary STRING, test BOOLEAN, PRIMARY KEY(id)",
     "Symbol": "id STRING, name STRING, qualified STRING, kind STRING, lang STRING, path STRING, "
-              "line INT64, end_line INT64, ast_kind STRING, doc STRING, entry BOOLEAN, PRIMARY KEY(id)",
+              "line INT64, end_line INT64, ast_kind STRING, doc STRING, summary STRING, entry BOOLEAN, PRIMARY KEY(id)",
     "Ast": "id STRING, path STRING, kind STRING, norm STRING, lang STRING, line INT64, end_line INT64, "
            "start_byte INT64, end_byte INT64, text STRING, field STRING, PRIMARY KEY(id)",
 }

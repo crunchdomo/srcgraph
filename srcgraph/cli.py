@@ -1,4 +1,4 @@
-"""srcgraph command line: build, query, serve, the presets importers and callers, scope, and trace."""
+"""srcgraph command line: build, query, serve, the presets, scope, domains, impact, describe and trace."""
 import argparse
 import json
 import os
@@ -10,7 +10,7 @@ import tempfile
 from collections import Counter
 from datetime import datetime
 
-from srcgraph import __version__, tracer
+from srcgraph import __version__, describe, tracer
 from srcgraph.graph import Graph
 from srcgraph.scan import DEFAULT_EXCLUDES, scan
 from srcgraph.selectors import SelectorError, compile_selector, glob_to_regex
@@ -29,6 +29,12 @@ PRESETS = {
                 "no callers of {}",
                 "MATCH (c)-[r:CALLS]->(s:Symbol) WHERE s.name = $name OR s.qualified = $name OR s.qualified ENDS WITH concat('.', $name) "
                 "RETURN coalesce(c.qualified, c.path) AS caller, r.line AS line, s.qualified AS target, r.guard AS guard ORDER BY caller, line"),
+    "find": ("units and symbols whose name, doc line or summary mentions a term (case-insensitive)", "nothing mentions {}",
+             # ponytail: substring scan over every node; LadybugDB's fts extension is the upgrade when a repo makes this slow
+             "MATCH (n:Symbol:Unit) WHERE NOT n.kind IN ['unresolved', 'builtin', 'external'] "
+             "AND (lower(n.name) CONTAINS lower($name) OR lower(n.doc) CONTAINS lower($name) OR lower(n.summary) CONTAINS lower($name)) "
+             "RETURN coalesce(n.qualified, n.path) AS node, n.path AS path, n.line AS line, "
+             "CASE WHEN n.doc <> '' THEN n.doc ELSE n.summary END AS about ORDER BY path, line"),
     "dead": ("symbols nothing calls, references, inherits or decorates, and that are not entry points (candidates: "
              "getattr and registries are invisible)", "nothing is dead",
              # a method whose name is accessed on anything anywhere (an x.name attribute in the syntax tier) is not
@@ -68,6 +74,7 @@ PRESETS = {
 def build(src_roots: list[str], excludes: tuple[str, ...], db_path: str) -> tuple[Graph, list[str]]:
     """Scan the roots and load a fresh graph; returns the graph and the scan warnings."""
     result = scan(src_roots, excludes)
+    describe.apply_cache(result, Source(src_roots[0]), describe.cache_path(db_path))
     graph = Graph(db_path)
     graph.load_code(result)
     return graph, result.warnings
@@ -110,6 +117,10 @@ def _parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("impact", help="what a change reaches: the symbols a git diff touches, what reaches them, and the tests that cover them")
     ro(sp, "rev", "git revision or range: HEAD (the working tree against it), origin/main...HEAD (a branch)")
     sp.add_argument("--hops", type=int, default=2, help="how far out to follow inbound wires (default 2)")
+    sp = sub.add_parser("describe", help="write a one-line summary for every unit and symbol without a doc line, with Claude; cached by source hash")
+    sp.add_argument("--db", default=DB)
+    sp.add_argument("--src", default=".", help="source root the graph was built from (default .)")
+    sp.add_argument("--model", default=describe.MODEL)
     ro(sub.add_parser("trace", help="run an expression in the interpreter on PATH and print the calls it makes through the graph"),
        "expr", "python expression, e.g. 'pkg.mod.f(1)', or a pytest node id like tests/test_x.py::test_y; activate the target's venv first")
     return p
@@ -133,7 +144,8 @@ def scope(graph: Graph, glob: str, no_tests: bool = False, no_typing: bool = Fal
                            f"coalesce(b.qualified, b.name) AS target, r.line AS line, coalesce(r.guard, '') AS guard "
                            f"ORDER BY source, line, target", params)
     return {
-        "doc": graph.query(f"MATCH (a:Unit) WHERE {a} RETURN a.path AS path, a.doc AS doc ORDER BY path", params),
+        "doc": graph.query(f"MATCH (a:Unit) WHERE {a} RETURN a.path AS path, "
+                           f"CASE WHEN a.doc <> '' THEN a.doc ELSE a.summary END AS doc ORDER BY path", params),
         "internal": edges(f"({a}) AND ({b})"),
         "outbound": edges(f"({a}) AND NOT ({b})"),
         "inbound": edges(f"NOT ({a}) AND ({b})"),
@@ -369,6 +381,9 @@ def _run(args, out, err) -> int:
             return 1
         _print(rows, args.format, out)
         return 0
+    if args.command == "describe":
+        with Graph.open(args.db) as graph:
+            return describe.run(graph, Source(args.src), describe.cache_path(args.db), args.model, out, err)
     if args.command == "serve" and args.no_build:
         graph, warnings = Graph.open(args.db, read_only=True), []
     else:

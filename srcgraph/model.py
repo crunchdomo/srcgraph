@@ -20,6 +20,7 @@ class Unit:
     lang: str
     kind: str
     doc: str = ""   # first paragraph of the docstring, or ""
+    summary: str = ""   # model-written one-liner from `describe`, "" until then; never mixed into doc
     test: bool = False   # lives under a tests directory or is named test_*.py / *_test.py
 
 
@@ -35,6 +36,7 @@ class Symbol:
     end_line: int
     ast_kind: str
     doc: str = ""
+    summary: str = ""   # as on Unit
     entry: bool = False   # reached from a __main__ guard, a declared console script, or a test
 
 
