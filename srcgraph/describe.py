@@ -16,7 +16,7 @@ MODEL = "claude-haiku-5-5"
 KINDS = ("function", "method", "class")
 UNIT_LINES = 60      # a module is summarised from its head
 SOURCE_LIMIT = 6000  # characters sent per node
-PROMPT = ("Write one sentence, under 25 words, saying what this {kind} is for. Plain prose, no preamble, "
+PROMPT = ("Write one sentence, under 25 words, saying what this {kind} is for. Start with a verb. Plain prose, no preamble, "
           "no code formatting, do not repeat its name.")
 
 
