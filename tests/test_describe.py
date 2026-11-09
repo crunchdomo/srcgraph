@@ -69,3 +69,21 @@ def test_describe_without_the_sdk_says_how_to_install_it(built, monkeypatch, cap
     monkeypatch.setattr(builtins, "__import__", no_anthropic)
     with pytest.raises(SystemExit, match="srcgraph\\[describe\\]"):
         main(["describe", "--db", built])
+
+
+def test_describe_without_a_credential_says_how_to_log_in(built, monkeypatch):
+    import sys, types
+    fake = types.ModuleType("anthropic")
+
+    class CredentialsError(Exception):
+        pass
+
+    class Anthropic:
+        class messages:
+            @staticmethod
+            def create(**kw):
+                raise CredentialsError("Credentials file not found")
+    fake.CredentialsError, fake.AuthenticationError, fake.Anthropic = CredentialsError, type("AuthenticationError", (Exception,), {}), Anthropic
+    monkeypatch.setitem(sys.modules, "anthropic", fake)
+    with pytest.raises(SystemExit, match="ant auth login"):
+        main(["describe", "--db", built])

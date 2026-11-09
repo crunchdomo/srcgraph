@@ -67,8 +67,11 @@ def _summarise_with_claude(model: str):
     client = anthropic.Anthropic()
 
     def summarise(kind: str, text: str) -> str:
-        r = client.messages.create(model=model, max_tokens=200, output_config={"effort": "low"},
-                                   system=PROMPT.format(kind=kind), messages=[{"role": "user", "content": text}])
+        try:
+            r = client.messages.create(model=model, max_tokens=200, output_config={"effort": "low"},
+                                       system=PROMPT.format(kind=kind), messages=[{"role": "user", "content": text}])
+        except (anthropic.CredentialsError, anthropic.AuthenticationError) as e:
+            raise SystemExit(f"describe needs an Anthropic credential: run `ant auth login` or export ANTHROPIC_API_KEY ({e})")
         if r.stop_reason == "refusal":
             return ""
         return " ".join(b.text for b in r.content if b.type == "text").strip().splitlines()[0] if r.content else ""
