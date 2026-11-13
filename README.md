@@ -14,7 +14,7 @@ pipx install srcgraph        # or pip install srcgraph in a virtualenv
 
 Releases are published to PyPI by CI when a `v*` tag is pushed.
 
-Python 3.11 or later. Python and Terraform (HCL) are supported.
+Python 3.11 or later. Python, Lua and Terraform (HCL) are supported.
 
 ## Use
 
@@ -106,6 +106,16 @@ same object, so the two cannot disagree.
 
 The normalised vocabulary is fixed in `srcgraph/model.py`: `ClassDef`, `FunctionDef`, `Call`, `Assign`, `Import`, `Decorator`, `Attribute`, `Name`, `String`, `Return`, `If`, `Loop`, `Try`, `Lambda`, `Parameter`, `Argument`, `Block`, `Comment`, `Type`, `Literal`. Extractors map their grammar onto it and never invent names.
 
+## Lua
+
+A `.lua` file is a module and its functions are symbols: `local function f`, `function M.f`, `function M:f`, `M.f = function` and a top-level `function f`. The table a file returns is its export, so `function M.send` in `app/net.lua` is `app.net.send`; a function on any other table keeps the table's name (`app.net.Codec.encode`). The comment block directly above a function is its `doc`.
+
+`require('app/net')` (or `'app.net'`, `pcall(require, ...)`, `require(...).field`) is an `IMPORTS` edge. A require is matched to a scanned file by module name, so `--src lua` names `lua/app/net.lua` `app.net`, as a Python source root does. Without that, a require still resolves when exactly one scanned file's path ends with it, because `package.path` is usually set at runtime.
+
+Calls resolve inside a file, through the export table and `self`, and through a required name (`net.send()`), so `callers`, `importers`, `hubs`, `dead`, `untested`, `scope` and `impact` work unchanged. Lua's standard library is a builtin (`builtins::lua.print`) and any other global is `unresolved`.
+
+What it cannot see: Lua has no types, so a call on a local value (`conn.open()`, `obj:method()`) is dropped. Modules reached without `require` (a host's own loader, a global set at runtime, `setmetatable` classes) are not followed, and a caller outside Lua (a host engine's hooks, a UI) is invisible, so `dead` lists candidates there too.
+
 ## Extending the schema
 
 A consumer adds its own tables at construction and loads them generically:
@@ -131,7 +141,7 @@ A 17k-line repo builds its full two-tier graph (110k syntax nodes) in about 3 se
 
 ## Adding a language
 
-One module in `srcgraph/extractors/` that turns a tree-sitter tree into `Unit`, `Symbol`, `Edge`, `RawImport` and `RawRef` records, a grammar-kind to normalised-kind mapping passed to `emit_syntax`, and a registration in `srcgraph/extractors/__init__.py`. Nothing else changes.
+One module in `srcgraph/extractors/` that turns a tree-sitter tree into `Unit`, `Symbol`, `Edge`, `RawImport` and `RawRef` records, a grammar-kind to normalised-kind mapping passed to `emit_syntax`, and a registration in `srcgraph/extractors/__init__.py`. A language with a module system of its own also tells `srcgraph/scan.py` how a file is named and how an import and a name resolve, as Python and Lua do; one whose names resolve within a directory, like Terraform, needs nothing more.
 
 ## Licence
 

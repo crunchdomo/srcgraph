@@ -57,7 +57,7 @@ Four of the five have no AI in them. They are plain programs a human or CI runs.
   exists, not whether, when, or with what it ran.
 - Data flow and type inference beyond `self`. `self.engine.start()` resolving through the type of
   `engine` is out of scope for a tree-sitter tool.
-- Languages beyond Python and Terraform until a tool needs one. The extractor registry is the seam.
+- Languages beyond Python, Lua and Terraform until a tool needs one. The extractor registry is the seam.
 
 ## Why a graph and not a model
 
