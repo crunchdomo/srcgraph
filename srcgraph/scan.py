@@ -127,9 +127,9 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
         res.edges.extend(ex.edges)
         res.ast.extend(ex.ast)
         res.ast_edges.extend(ex.ast_edges)
-    # Python and Lua names are global (module paths); other languages resolve within a directory.
+    # Python names are global (module paths); other languages resolve within a directory.
     def scope(lang: str, path: str) -> str:
-        return "" if lang in ("python", "lua") else posixpath.dirname(path)
+        return "" if lang == "python" else posixpath.dirname(path)
 
     by_qualified = {(s.lang, scope(s.lang, s.path), s.qualified): s.id for s in symbols.values()}
 
@@ -140,18 +140,26 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
 
     def lua_unit(name: str) -> str | None:
         """The scanned Lua module a require names: by its own name, else the only one whose name ends with it
-        (package.path is set at runtime, so the package root is often not a source root)."""
+        (package.path is set at runtime, so the package root is often not a source root). Two candidates are
+        nobody's: which file loads depends on package.path, which the graph does not have."""
+        name = name.removesuffix(".init")   # require('app.init') is app/init.lua, which is named app
         exact = [uid for n, uid in lua_names if n == name]
         found = exact or [uid for n, uid in lua_names if n.endswith("." + name)]
+        if len(found) > 1:
+            msg = f"ambiguous Lua module {name}: {', '.join(found)}"
+            if msg not in res.warnings:
+                res.warnings.append(msg)
         return found[0] if len(found) == 1 else None
 
+    # another language's library or unknown name is its own node: Lua's socket is not Python's socket
     def external(name: str, lang: str) -> str:
-        if name not in units:
-            units[name] = Unit(name, name, name, lang, "external")
-        return name
+        uid = name if lang == "python" else f"{lang}:{name}"
+        if uid not in units:
+            units[uid] = Unit(uid, uid, name, lang, "external")
+        return uid
 
     def unresolved(name: str, lang: str) -> str:
-        uid = unresolved_id(name)
+        uid = unresolved_id(name if lang in ("python", "terraform") else f"{lang}:{name}")
         if uid not in symbols:
             symbols[uid] = Symbol(uid, name, name, "unresolved", lang, "", 0, 0, "")
         return uid
@@ -166,20 +174,17 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
         return sid
 
     aliases: dict[str, dict[str, str]] = {}
+    lua_modules: dict[str, dict[str, tuple[str | None, str]]] = {}   # unit -> require token -> (scanned unit, module name)
     imports: set[tuple[str, str, int, str]] = set()   # (unit, target, line, guard): `from m import a, b` is one wire, not two
     typing_names: dict[str, set[str]] = {}   # unit -> names bound only under `if TYPE_CHECKING`
     for ex in extractions:
         for imp in ex.imports:
             importer = units[imp.unit_id]
             amap = aliases.setdefault(imp.unit_id, {})
-            if importer.lang == "lua":
+            if importer.lang == "lua":   # the extractor's alias is a token for the module, never a local name
                 target = lua_unit(imp.module)
-                base = units[target].name if target else imp.module
                 imports.add((imp.unit_id, target or external(imp.module, "lua"), imp.line, imp.guard))
-                for name, alias in imp.names:
-                    amap[alias] = f"{base}.{name}"
-                if imp.alias:
-                    amap[imp.alias] = base
+                lua_modules.setdefault(imp.unit_id, {})[imp.alias] = (target, imp.module)
                 continue
             module = _absolute(imp, importer)
             if imp.names:
@@ -209,7 +214,7 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
     for u in list(units.values()):
         if u.kind == "package":
             for other in units.values():
-                if other.kind in ("module", "package") and other.name.rpartition(".")[0] == u.name:
+                if other.lang == u.lang and other.kind in ("module", "package") and other.name.rpartition(".")[0] == u.name:
                     res.edges.append(Edge("CONTAINS", u.id, other.id))
 
     def resolve(qualified: str, hops: int = 3) -> str | None:
@@ -254,18 +259,25 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
                     target = builtin(ref.name, lang)
                     res.edges.append(Edge(REF_RELATIONS[ref.relation], ref.src_id, target, line=ref.line, guard=guard))
                     continue
-            elif lang == "lua":
-                head, dot, rest = ref.name.partition(".")
-                amap = aliases.get(src_unit.id, {})
-                qualified = f"{amap[head]}{dot}{rest}" if head in amap else f"{src_unit.name}.{ref.name}"
-                # ponytail: a module's local function answers to its name from another file too; the graph does not
-                # record which functions a module exports, so `net.f()` reaches a private `local function f` in net
-                target = by_qualified.get(("lua", "", qualified))
-                if target is None and ref.relation == "names":
-                    continue   # a name that is no scanned function: a value, a field, a constant
-                if target is None and head not in amap:   # not this file's and not a required module's: a global
-                    target = builtin(ref.name, lang) if head in LUA_BUILTINS else unresolved(ref.name, lang)
-                target = target or unresolved(qualified, lang)
+            elif lang == "lua":   # the extractor has said what kind of name this is (lua.extract)
+                head, _, rest = ref.name.partition(".")
+                target = None
+                if ref.name.startswith("."):   # one of the file's own functions
+                    target = symbol_id(src_unit.path, f"{src_unit.name}{ref.name}")
+                    name = ref.name[1:]
+                elif head.startswith("@"):   # through a require: only the file that require found, never a namesake
+                    uid, module = lua_modules.get(src_unit.id, {}).get(head, (None, head[1:].replace("/", ".")))
+                    target = symbol_id(uid, f"{units[uid].name}.{rest}") if uid and rest else None
+                    name = f"{module}.{rest}" if rest else module
+                    # ponytail: a module's local function answers to its name from another file too; the graph does
+                    # not record which functions a module exports, so `net.f()` reaches a private `local function f`
+                else:   # a global
+                    name = ref.name
+                if target not in symbols:
+                    if ref.relation == "names":
+                        continue   # a name that is no scanned function: a value, a field, a constant
+                    is_global = not ref.name.startswith((".", "@"))
+                    target = builtin(name, lang) if is_global and head in LUA_BUILTINS else unresolved(name, lang)
                 res.edges.append(Edge(REF_RELATIONS[ref.relation], ref.src_id, target, line=ref.line, guard=guard))
                 if ref.relation == "calls" and src_unit.test:
                     entry_ids.add(target)

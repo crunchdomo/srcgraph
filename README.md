@@ -110,11 +110,17 @@ The normalised vocabulary is fixed in `srcgraph/model.py`: `ClassDef`, `Function
 
 A `.lua` file is a module and its functions are symbols: `local function f`, `function M.f`, `function M:f`, `M.f = function` and a top-level `function f`. The table a file returns is its export, so `function M.send` in `app/net.lua` is `app.net.send`; a function on any other table keeps the table's name (`app.net.Codec.encode`). The comment block directly above a function is its `doc`.
 
-`require('app/net')` (or `'app.net'`, `pcall(require, ...)`, `require(...).field`) is an `IMPORTS` edge. A require is matched to a scanned file by module name, so `--src lua` names `lua/app/net.lua` `app.net`, as a Python source root does. Without that, a require still resolves when exactly one scanned file's path ends with it, because `package.path` is usually set at runtime.
+`require('app/net')` (or `'app.net'`, `pcall(require, ...)`, `require(...).field`) is an `IMPORTS` edge. A require is matched to a scanned file by module name, so `--src lua` names `lua/app/net.lua` `app.net`, as a Python source root does. Without that, a require still resolves when exactly one scanned file's path ends with it, because `package.path` is usually set at runtime. When two files could answer, the import stays external, nothing is called in either, and the build warns `ambiguous Lua module`.
 
-Calls resolve inside a file, through the export table and `self`, and through a required name (`net.send()`), so `callers`, `importers`, `hubs`, `dead`, `untested`, `scope` and `impact` work unchanged. Lua's standard library is a builtin (`builtins::lua.print`) and any other global is `unresolved`.
+Calls resolve inside a file, through the export table and `self`, and through the name a require is bound to, following Lua's own scoping: a parameter, a loop variable or a later `local` of the same name is that local, not the module. So `callers`, `importers`, `hubs`, `dead`, `untested`, `scope` and `impact` work unchanged. Lua's standard library is a builtin (`builtins::lua.print`), any other global is `unresolved`, and Lua's libraries and unknown names are nodes of their own (`lua:socket`), never shared with Python's.
 
-What it cannot see: Lua has no types, so a call on a local value (`conn.open()`, `obj:method()`) is dropped. Modules reached without `require` (a host's own loader, a global set at runtime, `setmetatable` classes) are not followed, and a caller outside Lua (a host engine's hooks, a UI) is invisible, so `dead` lists candidates there too.
+An edge is drawn only when the file itself shows where a name comes from; a missing edge is preferred to a guessed one. What that leaves out:
+
+- A call on a value of unknown type: `conn.open()`, `obj:method()`, and a module that arrives as a function's result (`local net = load_it('net')`).
+- Functions written inside a table constructor (`local M = { f = function() end }`, `return { f = f }`), and functions declared inside a top-level `do` or `if` block.
+- A function under a second name: `local send = net.send` then `send()`, a re-export of another module's function (`M.f = base.g`), and a module that returns the table it required.
+- Modules reached without `require` (a host's own loader, a global set at runtime), `setmetatable` classes, and callers outside Lua (a host engine's hooks, a UI). `dead` lists candidates there too.
+- A function another file calls as `net.f()` is found by name, so it also finds a `local function f` that `net` never exported.
 
 ## Extending the schema
 

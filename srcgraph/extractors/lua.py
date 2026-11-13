@@ -100,18 +100,30 @@ def _first_paragraph(text: list[str]) -> str:
     return " ".join(" ".join(para).split())
 
 
+def _trailing(comment: Node, lines: LineIndex) -> bool:
+    """A comment after code on the same line: it belongs to that line, not to what follows."""
+    prev = comment.prev_named_sibling
+    return prev is not None and lines.line(max(prev.end_byte - 1, prev.start_byte)) == lines.line(comment.start_byte)
+
+
 def _doc_above(stmt: Node, lines: LineIndex) -> str:
     """First paragraph of the comment block that ends on the line above stmt; "" if there is none."""
     first = stmt.prev_named_sibling
-    if first is None or first.type != "comment" or lines.line(first.end_byte - 1) != lines.line(stmt.start_byte) - 1:
+    if first is None or first.type != "comment" or _trailing(first, lines) \
+            or lines.line(first.end_byte - 1) != lines.line(stmt.start_byte) - 1:
         return ""
-    while (prev := first.prev_named_sibling) is not None and prev.type == "comment" \
+    while (prev := first.prev_named_sibling) is not None and prev.type == "comment" and not _trailing(prev, lines) \
             and lines.line(prev.end_byte - 1) == lines.line(first.start_byte) - 1:
         first = prev
     return _first_paragraph(_comment_block(first, lines)[0])
 
 
+_FN = "fn"   # a binding: the name is one of this file's functions
+
+
 def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
+    """Names a use is recorded under, for the scanner: `.send` is this file's own function, `@app/net.send` goes
+    through a require of app.net (the token has no dot, and is the import's alias), anything else is a global."""
     ex = Extraction()
     tree = _PARSER.parse(source)
     root = tree.root_node
@@ -119,9 +131,12 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
     ex.ast, ex.ast_edges = emit_syntax(root, LUA_NORM, rel_path, LANG, lines)
     ex.edges.append(Edge("DERIVED_FROM", rel_path, ast_id(rel_path, root)))
 
-    last = root.named_children[-1] if root.named_children else None
+    last = next((c for c in reversed(root.named_children) if c.type != "comment"), None)
     returned = last.named_children[0].named_children if last is not None and last.type == "return_statement" and last.named_children else []
-    export = _text(returned[0]) if len(returned) == 1 and returned[0].type == "identifier" else None
+    value = returned[0] if len(returned) == 1 else None
+    while value is not None and value.type == "parenthesized_expression" and value.named_children:
+        value = value.named_children[0]
+    export = _text(value) if value is not None and value.type == "identifier" else None
 
     def short(dotted: str) -> str:
         """The name inside this module: the export table's own name is dropped."""
@@ -161,83 +176,125 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
         unit_doc = "" if owned else _first_paragraph(text)   # a block sitting on a function is that function's doc
     ex.units.append(Unit(rel_path, rel_path, module_name, LANG, "module", doc=unit_doc, test=is_test_path(rel_path)))
 
-    # names bound by require anywhere in the file
-    # ponytail: file-wide, so a `local net = require(...)` inside one function names the module in every function
-    bound: dict[int, tuple[str, str | None, str | None]] = {}   # the require's start byte -> (module, field, local name)
-    aliases: set[str] = set()
+    def token(module: str, field: str | None = None) -> str:
+        return "@" + module.replace(".", "/") + (f".{field}" if field else "")
 
-    def find_requires(node: Node) -> None:
-        pairs = _assignments(node)
-        for i, (target, value) in enumerate(pairs):
-            req = _require(value)
-            if req and _dotted(value.child_by_field_name("name")) == "pcall":   # local ok, m = pcall(require, 'm')
-                target = pairs[i + 1][0] if i + 1 < len(pairs) else None
-            if req and target is not None and target.type == "identifier":
-                call = value if value.type == "function_call" else value.child_by_field_name("table")
-                bound[call.start_byte] = (*req, _text(target))
-                aliases.add(_text(target))
-        for c in node.named_children:
-            find_requires(c)
+    # a name given a module by plain assignment (`local net ... net = require('net')` in some function, the lazy
+    # require): it names that module wherever the name is not a nearer local
+    late: dict[str, set[str]] = {}
+    pending = [root]
+    while pending:
+        node = pending.pop()
+        if node.type == "assignment_statement" and (node.parent is None or node.parent.type != "variable_declaration"):
+            pairs = _assignments(node)
+            for i, (target, value) in enumerate(pairs):
+                req = _require(value)
+                if req and _dotted(value.child_by_field_name("name")) == "pcall":
+                    target = pairs[i + 1][0] if i + 1 < len(pairs) else None
+                if req and req[0] and target is not None and target.type == "identifier":
+                    late.setdefault(_text(target), set()).add(token(*req))
+        pending.extend(node.named_children)
 
-    find_requires(root)
-
-    file_locals: set[str] = set()
-    scopes: list[set[str]] = []    # parameter and local names of the functions being walked, innermost last
+    # lexical scopes, the file's own first: a name -> None (a local value), _FN, or the token of the module it requires
+    scopes: list[dict[str, str | None]] = [{name: _FN for name in bare}]
     guards: list[str] = []
 
     def guard() -> str:
         return guards[-1] if guards else ""
 
-    def declare(name: str) -> None:
-        if name not in aliases:
-            (scopes[-1] if scopes else file_locals).add(name)
+    def binding(name: str) -> tuple[int, str | None]:
+        """(depth of the scope that binds name, what it is bound to); depth -1 when nothing binds it: a global."""
+        for depth in range(len(scopes) - 1, -1, -1):
+            if name in scopes[depth]:
+                return depth, scopes[depth][name]
+        return -1, None
+
+    def own(name: str) -> str | None:
+        """`.name` when name (with its table) is one of this file's functions, as that spelling reaches it."""
+        if "." not in name:
+            return f".{name}" if name in bare else None
+        if name.partition(".")[0] == export and "." not in short(name):
+            return f".{short(name)}" if short(name) in exported else None
+        return f".{name}" if name in functions else None
 
     def reach(name: str, self_table: str | None) -> str | None:
         """The name a use of `name` is recorded under, or None when it is a local value or nothing this file can name."""
         head, dot, rest = name.partition(".")
-        if head == "self":
-            if not self_table:
-                return None
-            name = f"{self_table}.{rest}" if dot else self_table
-            head = name.partition(".")[0]
-        elif any(head in s for s in scopes):
-            return None
-        if head in aliases:
-            return name
-        if "." not in name and name in functions and name not in bare:
-            return None   # `local state` beside `function M.state`: the bare name is the value, not the function
-        if head == export and "." not in short(name) and short(name) in functions and short(name) not in exported:
-            return None   # `M.gps` beside `local function gps`: a field of the export, not the local function
-        if short(name) in functions:
-            return short(name)
-        if head == export or head in tables or head in functions or head in file_locals:
-            return None
+        depth, bound = binding(head)
+        if head == "self" and depth < 0:
+            return own(f"{self_table}.{rest}") if self_table and dot else None
+        if bound not in (None, _FN):
+            return f"{bound}{dot}{rest}"
+        if depth > 0:
+            return None   # a parameter or a local of an enclosing function or block
+        if depth <= 0 and bound is None and len(late.get(head, ())) == 1:
+            return f"{next(iter(late[head]))}{dot}{rest}"
+        if (found := own(name)) is not None:
+            return found
+        if depth == 0 or head == export or head in tables or head in functions:
+            return None   # a file-level value, or a field of one of the file's tables that is not a function
         return name   # a global
 
+    def note(module: str, node: Node) -> None:
+        if module:
+            ex.imports.append(RawImport(rel_path, module, 0, lines.line(node.start_byte), alias=token(module), guard=guard()))
+
     def inline(node: Node | None, owner: str, relation: str) -> bool:
-        """`require('m').f` used on the spot: an import under a name of its own, and a use of m.f."""
+        """`require('m').f` used on the spot: an import, and a use of m.f."""
         req = _require(node) if node is not None and node.type == "dot_index_expression" else None
-        if not req or req[1] is None or node.child_by_field_name("table").start_byte in bound:
+        if not req or req[1] is None:
             return False
-        alias, line = "@" + req[0].replace(".", "/"), lines.line(node.start_byte)   # no dot: the scanner splits a name on its first
-        ex.imports.append(RawImport(rel_path, req[0], 0, line, alias=alias))
-        ex.refs.append(RawRef(owner, f"{alias}.{req[1]}", line, relation, guard=guard()))
+        note(req[0], node)
+        if req[0]:
+            ex.refs.append(RawRef(owner, token(*req), lines.line(node.start_byte), relation, guard=guard()))
         return True
 
-    def params(fn: Node) -> set[str]:
+    def body_of(fn: Node, owner: str, self_table: str | None, method_of: str | None = None) -> None:
+        """Walk a function's body. `method_of` is the table a top-level definition sits on: its `self` is that table,
+        whether implicit (`function M:f()`) or written out (`function M.f(self)`)."""
         p = fn.child_by_field_name("parameters")
-        return {_text(c) for c in (p.named_children if p is not None else []) if c.type == "identifier"}
-
-    def body_of(fn: Node, owner: str, self_table: str | None) -> None:
+        names = {_text(c) for c in (p.named_children if p is not None else []) if c.type == "identifier"}
+        if method_of:
+            names.discard("self")
         body = fn.child_by_field_name("body")
         if body is not None:
-            scopes.append(params(fn))
-            walk(body, owner, self_table)
+            scopes.append(dict.fromkeys(names))
+            for child in body.named_children:
+                visit(child, owner, method_of or self_table)
             scopes.pop()
 
-    def walk(node: Node, owner: str, self_table: str | None) -> None:
-        for child in node.named_children:
-            visit(child, owner, self_table)
+    def assign(child: Node, owner: str, self_table: str | None) -> None:
+        local = child.type == "variable_declaration"
+        pairs = _assignments(child)
+        made: list[tuple[str, str | None]] = []
+        skip = False
+        for i, (target, value) in enumerate(pairs):
+            if skip:   # the module of `local ok, m = pcall(require, 'm')`
+                skip = False
+                continue
+            req = _require(value)
+            if req:
+                call = value.child_by_field_name("table") if value.type == "dot_index_expression" else value
+                note(req[0], call)
+                if _dotted(call.child_by_field_name("name")) == "pcall" and i + 1 < len(pairs):
+                    if target.type == "identifier":
+                        made.append((_text(target), None))
+                    target, skip = pairs[i + 1][0], True
+                if target.type == "identifier":
+                    made.append((_text(target), token(*req) if req[0] else None))
+                continue
+            if _dotted(target) is None:
+                visit(target, owner, self_table)
+            if value is not None:
+                visit(value, owner, self_table)
+            if target.type == "identifier":
+                made.append((_text(target), None))
+        for name, bound in made:   # after the values: `local x = x` reads the outer x
+            if local:
+                scopes[-1][name] = bound
+            elif bound is not None:   # `net = require(...)`: the name it was declared under now names the module
+                depth = binding(name)[0]
+                scopes[max(depth, 0)][name] = bound
 
     def visit(child: Node, owner: str, self_table: str | None) -> None:
         t = child.type
@@ -248,40 +305,34 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
         if t == "function_declaration":   # a nested one: top-level definitions are walked from their symbols
             name = child.child_by_field_name("name")
             if name is not None and name.type == "identifier":
-                declare(_text(name))
+                scopes[-1][_text(name)] = None
             body_of(child, owner, self_table)
         elif t == "function_definition":
             body_of(child, owner, self_table)
         elif t in ("variable_declaration", "assignment_statement"):
-            pairs = _assignments(child)
-            for target, value in pairs:
-                if _dotted(target) is None:
-                    visit(target, owner, self_table)
-                if value is not None:
-                    visit(value, owner, self_table)
-            if t == "variable_declaration":
-                for target, _ in pairs:
-                    if target.type == "identifier":
-                        declare(_text(target))
+            assign(child, owner, self_table)
         elif t == "for_statement":
             clause = child.child_by_field_name("clause")
+            parts = clause.named_children if clause is not None else []
             names = [clause.child_by_field_name("name")] if clause is not None and clause.type == "for_numeric_clause" \
-                else next((c.named_children for c in (clause.named_children if clause is not None else []) if c.type == "variable_list"), [])
-            for n in names:
-                if n is not None:
-                    declare(_text(n))
-            for c in (clause.named_children if clause is not None else []):
+                else next((c.named_children for c in parts if c.type == "variable_list"), [])
+            for c in parts:   # the bounds and the iterator are read before the loop's own names exist
                 if c.type != "variable_list" and c not in names:
                     visit(c, owner, self_table)
+            scopes.append({_text(n): None for n in names if n is not None})
             body = child.child_by_field_name("body")
-            if body is not None:
-                walk(body, owner, self_table)
+            for c in (body.named_children if body is not None else []):
+                visit(c, owner, self_table)
+            scopes.pop()
+        elif t == "block":
+            scopes.append({})
+            for c in child.named_children:
+                visit(c, owner, self_table)
+            scopes.pop()
         elif t == "function_call":
-            if child.start_byte in bound or _require(child):
-                module, field, local = bound.get(child.start_byte) or (*_require(child), None)
-                line = lines.line(child.start_byte)
-                ex.imports.append(RawImport(rel_path, module, 0, line, names=((field, local),)) if field and local
-                                  else RawImport(rel_path, module, 0, line, alias=local))
+            req = _require(child)
+            if req and binding("require")[0] < 0:
+                note(req[0], child)
             else:
                 callee = child.child_by_field_name("name")
                 name = _dotted(callee)
@@ -291,8 +342,8 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
                 elif name is None and callee is not None and not inline(callee, owner, "calls"):
                     visit(callee, owner, self_table)
                 args = child.child_by_field_name("arguments")
-                if args is not None:
-                    walk(args, owner, self_table)
+                for c in (args.named_children if args is not None else []):
+                    visit(c, owner, self_table)
         elif t == "field":   # { key = value }: the key is a name in the table, not a use
             key, value = child.child_by_field_name("name"), child.child_by_field_name("value")
             if key is not None and key.type != "identifier":
@@ -306,14 +357,15 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
                     visit(child.child_by_field_name("table"), owner, self_table)
             else:
                 target = reach(name, self_table)
-                if target and (target in functions or target.partition(".")[0] in aliases):
+                if target and target[0] in ".@":   # a global passed by name is no edge
                     ex.refs.append(RawRef(owner, target, lines.line(child.start_byte), "names", guard=guard()))
         else:
-            walk(child, owner, self_table)
+            for c in child.named_children:
+                visit(c, owner, self_table)
         if t in _GUARDS:
             guards.pop()
 
-    owners: dict[int, tuple[str, str | None, bool]] = {}   # a def's node -> (symbol or unit, self's table, walk its value)
+    owners: dict[int, tuple[str, str | None, bool]] = {}   # a def's node -> (symbol or unit, the table it sits on, walk its value)
     by_id: dict[str, Symbol] = {}
     for stmt, node, name, kind, alias, table in defs:
         owners[node.start_byte] = (rel_path, table, alias not in functions)
@@ -330,12 +382,12 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
             ex.edges.append(Edge("DERIVED_FROM", sym.id, ast_id(rel_path, stmt)))
         owners[node.start_byte] = (sym.id, table, False)
         if alias is not None:   # another name for a function reaches that function
-            ex.refs.append(RawRef(sym.id, alias, lines.line(stmt.start_byte), "calls"))
+            ex.refs.append(RawRef(sym.id, f".{alias}", lines.line(stmt.start_byte), "calls"))
 
     for stmt in root.named_children:
         if stmt.type == "function_declaration" and stmt.start_byte in owners:
             owner, table, _ = owners[stmt.start_byte]
-            body_of(stmt, owner, table)
+            body_of(stmt, owner, None, table)
             continue
         pairs = _assignments(stmt)
         if not any(value is not None and value.start_byte in owners for _, value in pairs):
@@ -349,11 +401,11 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
                 continue
             owner, table, walk_value = owners[value.start_byte]
             if value.type == "function_definition":
-                body_of(value, owner, table)
+                body_of(value, owner, None, table)
             elif walk_value:   # `M.fmt = string.format`, `M.pack = framing.pack`: a use of something outside the file
                 visit(value, rel_path, None)
         if stmt.type == "variable_declaration":
             for target, _ in pairs:
-                if target.type == "identifier" and _text(target) not in functions:
-                    declare(_text(target))
+                if target.type == "identifier" and _text(target) not in bare:
+                    scopes[0][_text(target)] = None
     return ex

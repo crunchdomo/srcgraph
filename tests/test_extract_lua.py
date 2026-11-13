@@ -29,38 +29,38 @@ def _refs(e):
 
 def test_require_is_an_import_with_the_local_name_it_binds():
     e = extract("lua/app/main.lua", (ROOT / "app/main.lua").read_bytes(), "app.main")
-    assert {(i.module, i.alias, i.names, i.line) for i in e.imports} == {
-        ("app.net", "net", (), 1), ("app.framing", None, (("pack", "pack"),), 2), ("dkjson", "json", (), 3)}
+    assert {(i.module, i.alias, i.line) for i in e.imports} == {
+        ("app.net", "@app/net", 1), ("app.framing", "@app/framing", 2), ("dkjson", "@dkjson", 3)}
     assert all(i.unit_id == "lua/app/main.lua" and i.level == 0 for i in e.imports)
 
 
 def test_calls_name_what_they_reach():
     assert _refs(_net()) == {
-        ("app.net.send", "bump", "calls", "if@16"), ("app.net.send", "framing.pack", "calls", ""),
-        ("app.net.flush", "ipairs", "calls", "for@23"), ("app.net.flush", "send", "calls", "for@23"),
+        ("app.net.send", ".bump", "calls", "if@16"), ("app.net.send", "@app/framing.pack", "calls", ""),
+        ("app.net.flush", "ipairs", "calls", "for@23"), ("app.net.flush", ".send", "calls", "for@23"),
         ("app.net.flush", "log", "calls", ""), ("app.net.flush", "string.format", "calls", ""),
-        ("app.net.count", "bump", "calls", "")}   # queue.clear() is a call on a local value: dropped
+        ("app.net.count", ".bump", "calls", "")}   # queue.clear() is a call on a local value: dropped
 
 
 def test_calls_from_the_file_itself_and_through_imported_names():
     e = extract("lua/app/main.lua", (ROOT / "app/main.lua").read_bytes(), "app.main")
     assert _refs(e) == {
-        ("lua/app/main.lua", "net.send", "calls", ""), ("lua/app/main.lua", "pack", "calls", ""),
-        ("lua/app/main.lua", "net.count", "calls", ""), ("lua/app/main.lua", "run", "calls", ""),
-        ("app.main.run", "net.flush", "calls", ""), ("app.main.run", "json.encode", "calls", "")}
+        ("lua/app/main.lua", "@app/net.send", "calls", ""), ("lua/app/main.lua", "@app/framing.pack", "calls", ""),
+        ("lua/app/main.lua", "@app/net.count", "calls", ""), ("lua/app/main.lua", ".run", "calls", ""),
+        ("app.main.run", "@app/net.flush", "calls", ""), ("app.main.run", "@dkjson.encode", "calls", "")}
 
 
 def test_other_tables_keep_their_name_and_closures_belong_to_their_function():
     e = extract("lua/app/framing.lua", (ROOT / "app/framing.lua").read_bytes(), "app.framing")
     assert {s.qualified for s in e.symbols} == {"app.framing.Codec.encode", "app.framing.pack", "app.framing.standalone"}
     assert _refs(e) == {("app.framing.Codec.encode", "tostring", "calls", ""),
-                        ("app.framing.pack", "Codec.encode", "calls", ""),   # helper(frame) calls a local: dropped
-                        ("app.framing.standalone", "pack", "calls", "")}
+                        ("app.framing.pack", ".Codec.encode", "calls", ""),   # helper(frame) calls a local: dropped
+                        ("app.framing.standalone", ".pack", "calls", "")}
 
 
 def test_a_function_passed_by_name_is_referenced():
     e = extract("a.lua", b"local function tick() end\nlocal function start(timer)\n  timer.every(1, tick)\nend\n", "a")
-    assert _refs(e) == {("a.start", "tick", "names", "")}
+    assert _refs(e) == {("a.start", ".tick", "names", "")}
 
 
 def test_doc_is_the_comment_above():
@@ -86,9 +86,9 @@ def test_require_in_other_shapes_is_still_an_import():
            b"trees.plant()\n")
     e = extract("a.lua", src, "a")
     assert {(i.module, i.alias, i.line) for i in e.imports} == {
-        ("app.trees", "trees", 1), ("app.globe", "@app/globe", 2), ("app.globe", "@app/globe", 3), ("lua.ge.sites", "sites", 4)}
+        ("app.trees", "@app/trees", 1), ("app.globe", "@app/globe", 2), ("app.globe", "@app/globe", 3), ("lua.ge.sites", "@lua/ge/sites", 4)}
     assert _refs(e) == {("a.lua", "@app/globe.clear", "calls", ""), ("a.lua", "@app/globe.transform", "names", ""),
-                        ("a.lua", "pcall", "calls", ""), ("a.lua", "trees.plant", "calls", "")}
+                        ("a.lua", "pcall", "calls", ""), ("a.lua", "@app/trees.plant", "calls", "")}
 
 
 def test_self_means_the_table_the_function_sits_on_and_nothing_elsewhere():
@@ -97,8 +97,8 @@ def test_self_means_the_table_the_function_sits_on_and_nothing_elsewhere():
            b"local a, b = function() Q.push() end, function() loose() end\n"
            b"M.again = Q.push\nM.fmt = string.format\nreturn M\n")
     e = extract("q.lua", src, "q")
-    assert _refs(e) == {("q.Q.drain", "Q.push", "calls", ""), ("q.a", "Q.push", "calls", ""), ("q.b", "loose", "calls", ""),
-                        ("q.again", "Q.push", "calls", "")}   # loose() has no self; string.format is not this file's
+    assert _refs(e) == {("q.Q.drain", ".Q.push", "calls", ""), ("q.a", ".Q.push", "calls", ""), ("q.b", ".loose", "calls", ""),
+                        ("q.again", ".Q.push", "calls", "")}   # loose() has no self; string.format is not this file's
 
 
 def test_a_local_value_is_not_the_exported_function_of_the_same_name():
@@ -107,10 +107,57 @@ def test_a_local_value_is_not_the_exported_function_of_the_same_name():
            b"function M.ready() reset() return state == 'up', M.state() end\n"
            b"M.reset = reset\nreturn M\n")
     e = extract("n.lua", src, "n")
-    assert _refs(e) == {("n.ready", "reset", "calls", ""), ("n.ready", "state", "calls", "")}   # M.state(), not the local
+    assert _refs(e) == {("n.ready", ".reset", "calls", ""), ("n.ready", ".state", "calls", "")}   # M.state(), not the local
 
 
 def test_a_field_on_the_export_is_not_the_local_function_of_the_same_name():
     src = (b"local M = {}\nlocal function gps()\n  if not M.gps then M.gps = load() end\n  return M.gps\nend\n"
            b"function M.find() return gps() end\nreturn M\n")
-    assert _refs(extract("f.lua", src, "f")) == {("f.gps", "load", "calls", "if@3"), ("f.find", "gps", "calls", "")}
+    assert _refs(extract("f.lua", src, "f")) == {("f.gps", "load", "calls", "if@3"), ("f.find", ".gps", "calls", "")}
+
+
+def test_a_local_that_shadows_a_required_name_or_a_function_is_a_local():
+    src = (b"local net = require('net')\nlocal function send() end\n"
+           b"local function f()\n  local net = {}\n  net.send()\n  local send = print\n  send()\nend\n"
+           b"for _, net in ipairs({}) do net.send() end\n"
+           b"for _, send in ipairs({}) do send() end\n"
+           b"net.send()\nsend()\n"
+           b"local send = print\nsend()\n")
+    assert _refs(extract("a.lua", src, "a")) == {
+        ("a.lua", "ipairs", "calls", "for@9"), ("a.lua", "ipairs", "calls", "for@10"),
+        ("a.lua", "@net.send", "calls", ""), ("a.lua", ".send", "calls", "")}   # lines 11 and 12 only
+
+
+def test_a_name_bound_to_two_modules_in_two_functions_reaches_each():
+    src = (b"local function f()\n  local m = require('a')\n  m.go()\nend\n"
+           b"local function g()\n  local m = require('b')\n  m.go()\nend\n")
+    assert _refs(extract("main.lua", src, "main")) == {("main.f", "@a.go", "calls", ""), ("main.g", "@b.go", "calls", "")}
+
+
+def test_a_callbacks_own_self_is_not_the_methods_table():
+    src = (b"local M = {}\nfunction M.render() end\n"
+           b"function M:update(list)\n  list:each(function(self) self.render() end)\n  self.render()\nend\n"
+           b"function M.draw(self) self.render() end\nreturn M\n")
+    assert _refs(extract("a.lua", src, "a")) == {("a.update", ".render", "calls", ""), ("a.draw", ".render", "calls", "")}
+    assert {r.line for r in extract("a.lua", src, "a").refs} == {5, 7}
+
+
+def test_an_import_carries_its_guard():
+    e = extract("a.lua", b"if jit then\n  local ffi = require('ffi')\nend\nfor i = 1, 2 do require('b').go() end\n", "a")
+    assert {(i.module, i.guard) for i in e.imports} == {("ffi", "if@1"), ("b", "for@4")}
+
+
+def test_a_comment_trailing_the_line_above_is_not_a_doc():
+    e = extract("a.lua", b"local x = 1 -- the x counter\nlocal function f() end\n", "a")
+    assert e.symbols[0].doc == ""
+
+
+def test_the_export_survives_a_trailing_comment_and_parentheses():
+    for tail in (b"return M\n-- end of file\n", b"return (M)\n", b"return M;\n"):
+        e = extract("net.lua", b"local M = {}\nfunction M.send() end\n" + tail, "net")
+        assert [s.qualified for s in e.symbols] == ["net.send"], tail
+
+
+def test_a_long_expression_does_not_overflow_the_stack():
+    src = b"local s = " + b" .. ".join([b'"x"'] * 900) + b"\nlocal function f() return " + b" + ".join([b"g()"] * 900) + b" end\n"
+    assert len(extract("big.lua", src, "big").refs) == 900
