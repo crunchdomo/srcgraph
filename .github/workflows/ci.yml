@@ -10,7 +10,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -e '.[dev]'
+      - run: pip install -e '.[dev,mcp]'   # mcp so tests/test_mcp.py runs instead of skipping
       - run: pytest
       # adrgraph is a dev-only tool here, used to enforce this repo's own ADRs.
       - run: pip install git+https://github.com/crunchdomo/adrgraph

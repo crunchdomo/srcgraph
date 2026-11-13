@@ -102,6 +102,9 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--port", type=int, default=8765)
     s.add_argument("--no-build", action="store_true", help="serve the existing database")
     s.add_argument("--allow-query", action="store_true", help="enable POST /api/query (raw Cypher)")
+    s = sub.add_parser("mcp", help="serve the graph to a coding agent as an MCP server over stdio (pip install 'srcgraph[mcp]')")
+    common(s)
+    s.add_argument("--allow-query", action="store_true", help="also offer a query tool that runs raw Cypher")
     ro(sub.add_parser("query", help="run Cypher against the last built graph"), "cypher")
     for name, (help_, _, cypher) in PRESETS.items():
         ro(sub.add_parser(name, help=help_), "name" if "$name" in cypher else None)
@@ -384,6 +387,8 @@ def _run(args, out, err) -> int:
     if args.command == "describe":
         with Graph.open(args.db) as graph:
             return describe.run(graph, Source(args.src), describe.cache_path(args.db), args.model, out, err)
+    if args.command == "mcp":
+        return mcp(args, err)
     if args.command == "serve" and args.no_build:
         graph, warnings = Graph.open(args.db, read_only=True), []
     else:
@@ -409,6 +414,23 @@ def serve(graph: Graph, source: Source, port: int, allow_query: bool, out, route
         pass
     finally:
         srv.server_close()
+    return 0
+
+
+def mcp(args, err) -> int:
+    """Serve the graph over stdio until the client hangs up. stdout belongs to the protocol, so everything else goes to err."""
+    try:
+        from srcgraph.mcp_server import make_server
+    except ImportError as exc:
+        raise RuntimeError("srcgraph mcp needs the MCP SDK: pip install 'srcgraph[mcp]'") from exc
+    from srcgraph.api import Repo
+    if not os.path.exists(args.db):
+        graph, warnings = build(args.src or ["."], DEFAULT_EXCLUDES + tuple(args.exclude), args.db)
+        graph.close()
+        for w in warnings:
+            print(f"warning: {w}", file=err)
+    with Repo(Graph.open(args.db, read_only=True), args.db) as repo:   # read-only: a long-lived reader, and query cannot write
+        make_server(repo, args.allow_query).run("stdio")
     return 0
 
 
