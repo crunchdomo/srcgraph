@@ -54,6 +54,29 @@ The presets answer the common questions without Cypher; `--format json` works on
 
 `--src` repeats and sets the import roots: with a `src/` layout pass `--src src`. A file under two roots (`--src src --src .`, for a `src/` layout whose `tests/` is itself a package) is scanned once, under the most specific root. Pointing a root at a package directory itself (one with `__init__.py`) names its modules without the package prefix, so `from pkg.x import y` inside it goes unresolved; the build warns and tells you to scan the parent. It also warns when it finds no source files at all. `--exclude` adds names or globs to the defaults: every hidden directory, `venv`, `node_modules`, `__pycache__`. A pattern without `/` matches one path component at any depth; with `/` it matches from the current directory, so `--exclude src` would also exclude the `src` root itself. Inside a git repository the file list comes from `git ls-files`, so anything `.gitignore` hides (build output, `cdk.out/`, generated code) is never scanned; untracked files that are not ignored still are.
 
+## For coding agents (MCP)
+
+`srcgraph mcp` serves the graph to a coding agent over the Model Context Protocol, so it asks "who calls this?" and gets the graph's answer instead of grepping. It runs locally over stdio, builds the graph when there is none, and opens it read-only.
+
+```bash
+pipx install 'srcgraph[mcp]'     # the MCP SDK is an optional extra
+srcgraph mcp                     # in the repository's root; add --src src for a src/ layout
+```
+
+Register it with any MCP client. For Claude Code, from the repository's root:
+
+```bash
+claude mcp add srcgraph -- srcgraph mcp
+```
+
+For a client configured with JSON (the key names vary by client):
+
+```json
+{ "mcpServers": { "srcgraph": { "command": "srcgraph", "args": ["mcp"] } } }
+```
+
+The tools are the presets above, with the same rows the CLI prints: `find`, `callers`, `importers`, `hubs`, `dead`, `untested`, `scope` and `impact`. `--allow-query` adds a `query` tool that runs raw Cypher; without the flag the tool does not exist. The graph is not rebuilt while the server runs: after a large change, run `srcgraph build` and restart it.
+
 ## As a library
 
 The same answers from Python, for notebooks, scripts and tools built on top (adrgraph is one):

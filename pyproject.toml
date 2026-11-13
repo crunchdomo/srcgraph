@@ -19,6 +19,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8"]
 describe = ["anthropic>=1"]
+mcp = ["mcp>=2"]
 
 [project.scripts]
 srcgraph = "srcgraph.cli:main"
