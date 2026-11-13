@@ -8,6 +8,7 @@ import sys
 import tomllib
 from dataclasses import replace
 from srcgraph.extractors import EXTRACTORS
+from srcgraph.extractors.lua import BUILTINS as LUA_BUILTINS
 from srcgraph.model import REF_RELATIONS, Edge, Extraction, RawImport, Symbol, Unit, symbol_id, unresolved_id
 from srcgraph.selectors import glob_to_regex
 
@@ -16,8 +17,10 @@ DEFAULT_EXCLUDES = (".*", "venv", "node_modules", "__pycache__")   # .* covers .
 
 
 def module_name(root: str, rel_to_root: str) -> str:
-    name = rel_to_root[:-3].replace("/", ".") if rel_to_root.endswith(".py") else rel_to_root
-    return name.removesuffix(".__init__")
+    for ext, init in ((".py", ".__init__"), (".lua", ".init")):   # a package's own file names the package
+        if rel_to_root.endswith(ext):
+            return rel_to_root[:-len(ext)].replace("/", ".").removesuffix(init)
+    return rel_to_root
 
 
 def _rel(path: str) -> str:
@@ -109,7 +112,8 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
         ex = EXTRACTORS[os.path.splitext(rel)[1]](rel, source, module_name(root, rel_to_root))
         extractions.append(ex)
         for u in ex.units:
-            index.setdefault(u.name, []).append(u.id)
+            if u.lang != "lua":   # a Lua module is found by lua_unit: tools/rec.lua is not Python's tools.rec
+                index.setdefault(u.name, []).append(u.id)
 
     ambiguous = {name for name, ids in index.items() if len(ids) > 1}
     for name in sorted(ambiguous):
@@ -123,14 +127,23 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
         res.edges.extend(ex.edges)
         res.ast.extend(ex.ast)
         res.ast_edges.extend(ex.ast_edges)
-    # Python names are global (module paths); other languages resolve within a directory.
+    # Python and Lua names are global (module paths); other languages resolve within a directory.
     def scope(lang: str, path: str) -> str:
-        return "" if lang == "python" else posixpath.dirname(path)
+        return "" if lang in ("python", "lua") else posixpath.dirname(path)
 
     by_qualified = {(s.lang, scope(s.lang, s.path), s.qualified): s.id for s in symbols.values()}
 
     def unit_for(name: str) -> str | None:
         return index[name][0] if name in index and name not in ambiguous else None
+
+    lua_names = sorted((u.name, u.id) for u in units.values() if u.lang == "lua")
+
+    def lua_unit(name: str) -> str | None:
+        """The scanned Lua module a require names: by its own name, else the only one whose name ends with it
+        (package.path is set at runtime, so the package root is often not a source root)."""
+        exact = [uid for n, uid in lua_names if n == name]
+        found = exact or [uid for n, uid in lua_names if n.endswith("." + name)]
+        return found[0] if len(found) == 1 else None
 
     def external(name: str, lang: str) -> str:
         if name not in units:
@@ -144,10 +157,12 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
         return uid
 
     def builtin(name: str, lang: str) -> str:
-        """One shared Symbol per builtin, e.g. builtins::builtins.print, instead of an unresolved name per module."""
-        sid = symbol_id("builtins", f"builtins.{name}")
+        """One shared Symbol per builtin, e.g. builtins::builtins.print, instead of an unresolved name per module.
+        Another language's standard library has its own, builtins::lua.print."""
+        qualified = f"{'builtins' if lang == 'python' else lang}.{name}"
+        sid = symbol_id("builtins", qualified)
         if sid not in symbols:
-            symbols[sid] = Symbol(sid, name, f"builtins.{name}", "builtin", lang, "builtins", 0, 0, "")
+            symbols[sid] = Symbol(sid, name, qualified, "builtin", lang, "builtins", 0, 0, "")
         return sid
 
     aliases: dict[str, dict[str, str]] = {}
@@ -157,6 +172,15 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
         for imp in ex.imports:
             importer = units[imp.unit_id]
             amap = aliases.setdefault(imp.unit_id, {})
+            if importer.lang == "lua":
+                target = lua_unit(imp.module)
+                base = units[target].name if target else imp.module
+                imports.add((imp.unit_id, target or external(imp.module, "lua"), imp.line, imp.guard))
+                for name, alias in imp.names:
+                    amap[alias] = f"{base}.{name}"
+                if imp.alias:
+                    amap[imp.alias] = base
+                continue
             module = _absolute(imp, importer)
             if imp.names:
                 for name, alias in imp.names:
@@ -230,6 +254,22 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
                     target = builtin(ref.name, lang)
                     res.edges.append(Edge(REF_RELATIONS[ref.relation], ref.src_id, target, line=ref.line, guard=guard))
                     continue
+            elif lang == "lua":
+                head, dot, rest = ref.name.partition(".")
+                amap = aliases.get(src_unit.id, {})
+                qualified = f"{amap[head]}{dot}{rest}" if head in amap else f"{src_unit.name}.{ref.name}"
+                # ponytail: a module's local function answers to its name from another file too; the graph does not
+                # record which functions a module exports, so `net.f()` reaches a private `local function f` in net
+                target = by_qualified.get(("lua", "", qualified))
+                if target is None and ref.relation == "names":
+                    continue   # a name that is no scanned function: a value, a field, a constant
+                if target is None and head not in amap:   # not this file's and not a required module's: a global
+                    target = builtin(ref.name, lang) if head in LUA_BUILTINS else unresolved(ref.name, lang)
+                target = target or unresolved(qualified, lang)
+                res.edges.append(Edge(REF_RELATIONS[ref.relation], ref.src_id, target, line=ref.line, guard=guard))
+                if ref.relation == "calls" and src_unit.test:
+                    entry_ids.add(target)
+                continue
             else:
                 qualified = ref.name
             target = (resolve(qualified) if lang == "python" else by_qualified.get((lang, scope(lang, src_unit.path), qualified))
