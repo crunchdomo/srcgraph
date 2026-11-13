@@ -23,9 +23,9 @@ def test_require_resolves_by_path_suffix_when_the_package_root_is_not_a_source_r
     e = _edges(repo)
     assert ("IMPORTS", MAIN, NET) in e and ("IMPORTS", MAIN, FRAMING) in e and ("IMPORTS", NET, FRAMING) in e
     assert ("IMPORTS", "tests/test_net.lua", NET) in e
-    assert ("IMPORTS", MAIN, "dkjson") in e
-    ext = next(u for u in repo.units if u.id == "dkjson")
-    assert (ext.kind, ext.lang) == ("external", "lua")
+    assert ("IMPORTS", MAIN, "lua:dkjson") in e
+    ext = next(u for u in repo.units if u.id == "lua:dkjson")
+    assert (ext.kind, ext.lang, ext.name) == ("external", "lua", "dkjson")
     assert not repo.warnings
 
 
@@ -60,10 +60,10 @@ def test_standard_library_is_builtin_and_unknown_globals_are_unresolved(repo):
     e = _edges(repo)
     flush = f"{NET}::lua.app.net.flush"
     assert ("CALLS", flush, "builtins::lua.ipairs") in e and ("CALLS", flush, "builtins::lua.string.format") in e
-    assert ("CALLS", flush, "unresolved::log") in e
-    assert ("CALLS", f"{MAIN}::lua.app.main.run", "unresolved::dkjson.encode") in e
+    assert ("CALLS", flush, "unresolved::lua:log") in e
+    assert ("CALLS", f"{MAIN}::lua.app.main.run", "unresolved::lua:dkjson.encode") in e
     kinds = {s.id: (s.kind, s.lang) for s in repo.symbols}
-    assert kinds["builtins::lua.ipairs"] == ("builtin", "lua") and kinds["unresolved::log"] == ("unresolved", "lua")
+    assert kinds["builtins::lua.ipairs"] == ("builtin", "lua") and kinds["unresolved::lua:log"] == ("unresolved", "lua")
     assert "builtins::builtins.print" not in kinds   # Lua's print is not Python's
 
 
@@ -92,7 +92,8 @@ def test_a_require_two_files_could_answer_stays_external(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     res = scan(["."])
     e = _edges(res)
-    assert ("IMPORTS", "main.lua", "util") in e and ("CALLS", "main.lua", "unresolved::util.f") in e
+    assert ("IMPORTS", "main.lua", "lua:util") in e and ("CALLS", "main.lua", "unresolved::lua:util.f") in e
+    assert res.warnings == ["ambiguous Lua module util: x/util.lua, y/util.lua"]
 
 
 def test_a_call_on_an_inline_require_reaches_the_function(tmp_path, monkeypatch):
@@ -117,3 +118,59 @@ def test_a_lua_file_beside_a_python_module_of_the_same_name_leaves_python_import
     assert not res.warnings
     assert ("CALLS", "main.py", "tools/rec.py::tools.rec.go") in e and ("CALLS", "main.lua", "tools/rec.lua::tools.rec.go") in e
     assert ("IMPORTS", "main.py", "tools/rec.py") in e and ("IMPORTS", "main.lua", "tools/rec.lua") in e
+
+
+def _repo(tmp_path, monkeypatch, files, roots=(".",)):
+    for rel, text in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text)
+    monkeypatch.chdir(tmp_path)
+    return scan(list(roots))
+
+
+MOD = "local M = {}\nfunction M.f() end\nreturn M\n"
+
+
+def test_a_global_is_not_a_sibling_module_nobody_required(tmp_path, monkeypatch):
+    res = _repo(tmp_path, monkeypatch, {"app/init.lua": "local M = {}\nfunction M.start() util.f() end\nreturn M\n", "app/util.lua": MOD})
+    assert ("CALLS", "app/init.lua::app.start", "unresolved::lua:util.f") in _edges(res)
+    assert not any(lbl == "CALLS" and dst.endswith("app.util.f") for lbl, _, dst in _edges(res))
+
+
+def test_two_modules_of_one_name_get_no_calls_and_a_warning(tmp_path, monkeypatch):
+    res = _repo(tmp_path, monkeypatch, {"lua/helpers.lua": MOD, "spec/helpers.lua": MOD,
+                                        "lua/main.lua": "local h = require('helpers')\nh.f()\n"}, roots=("lua", "spec"))
+    assert ("CALLS", "lua/main.lua", "unresolved::lua:helpers.f") in _edges(res)
+    assert res.warnings == ["ambiguous Lua module helpers: lua/helpers.lua, spec/helpers.lua"]
+
+
+def test_each_function_reaches_the_module_its_own_local_names(tmp_path, monkeypatch):
+    res = _repo(tmp_path, monkeypatch, {
+        "a.lua": MOD, "b.lua": MOD,
+        "main.lua": "local function one()\n  local m = require('a')\n  m.f()\nend\n"
+                    "local function two()\n  local m = require('b')\n  m.f()\n  local a = {}\n  a.f()\nend\n"})
+    calls = {(src, dst) for lbl, src, dst in _edges(res) if lbl == "CALLS"}
+    assert calls == {("main.lua::main.one", "a.lua::a.f"), ("main.lua::main.two", "b.lua::b.f")}
+
+
+def test_lua_and_python_do_not_share_a_library_or_an_unknown_name(tmp_path, monkeypatch):
+    res = _repo(tmp_path, monkeypatch, {"a.lua": "local socket = require('socket')\nsocket.connect()\n",
+                                        "b.py": "import socket\nsocket.connect()\n"})
+    e = _edges(res)
+    assert ("IMPORTS", "b.py", "socket") in e and ("IMPORTS", "a.lua", "lua:socket") in e
+    assert ("CALLS", "b.py", "unresolved::socket.connect") in e and ("CALLS", "a.lua", "unresolved::lua:socket.connect") in e
+    assert {u.id: u.lang for u in res.units if u.kind == "external"} == {"socket": "python", "lua:socket": "lua"}
+    assert {s.id: s.lang for s in res.symbols if s.kind == "unresolved"} == {
+        "unresolved::socket.connect": "python", "unresolved::lua:socket.connect": "lua"}
+
+
+def test_a_python_package_does_not_contain_a_lua_module(tmp_path, monkeypatch):
+    res = _repo(tmp_path, monkeypatch, {"src/app/__init__.py": "", "src/app/core.py": "def f():\n    pass\n",
+                                        "lua/app/net.lua": MOD}, roots=("src", "lua"))
+    contained = {dst for lbl, src, dst in _edges(res) if lbl == "CONTAINS" and src == "src/app/__init__.py"}
+    assert contained == {"src/app/core.py"}
+
+
+def test_requiring_a_packages_init_by_name_finds_the_package(tmp_path, monkeypatch):
+    res = _repo(tmp_path, monkeypatch, {"app/init.lua": MOD, "main.lua": "local app = require('app.init')\napp.f()\n"})
+    assert ("IMPORTS", "main.lua", "app/init.lua") in _edges(res) and ("CALLS", "main.lua", "app/init.lua::app.f") in _edges(res)
