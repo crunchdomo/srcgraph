@@ -146,6 +146,10 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
                 defs.append((stmt, value, short(name), "function", short(_dotted(value)), None))
     functions = {name for _, _, name, _, alias, _ in defs if alias is None}
     tables = {name.rpartition(".")[0] for name in functions if "." in name}
+    # functions a bare name reaches: `local function f`, not `function M.f`, which only `M.f` names
+    bare = {name for _, _, name, _, alias, table in defs if alias is None and table is None}
+    # and the ones `M.f` reaches: defined on the export, or put there by `M.f = f`
+    exported = {name for _, _, name, _, alias, table in defs if "." not in name and (table == export if alias is None else alias in functions)}
 
     first = root.named_children[0] if root.named_children else None
     unit_doc = ""
@@ -200,6 +204,10 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
             return None
         if head in aliases:
             return name
+        if "." not in name and name in functions and name not in bare:
+            return None   # `local state` beside `function M.state`: the bare name is the value, not the function
+        if head == export and "." not in short(name) and short(name) in functions and short(name) not in exported:
+            return None   # `M.gps` beside `local function gps`: a field of the export, not the local function
         if short(name) in functions:
             return short(name)
         if head == export or head in tables or head in functions or head in file_locals:

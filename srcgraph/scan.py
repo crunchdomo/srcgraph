@@ -258,6 +258,8 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
                 head, dot, rest = ref.name.partition(".")
                 amap = aliases.get(src_unit.id, {})
                 qualified = f"{amap[head]}{dot}{rest}" if head in amap else f"{src_unit.name}.{ref.name}"
+                # ponytail: a module's local function answers to its name from another file too; the graph does not
+                # record which functions a module exports, so `net.f()` reaches a private `local function f` in net
                 target = by_qualified.get(("lua", "", qualified))
                 if target is None and ref.relation == "names":
                     continue   # a name that is no scanned function: a value, a field, a constant

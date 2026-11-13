@@ -99,3 +99,18 @@ def test_self_means_the_table_the_function_sits_on_and_nothing_elsewhere():
     e = extract("q.lua", src, "q")
     assert _refs(e) == {("q.Q.drain", "Q.push", "calls", ""), ("q.a", "Q.push", "calls", ""), ("q.b", "loose", "calls", ""),
                         ("q.again", "Q.push", "calls", "")}   # loose() has no self; string.format is not this file's
+
+
+def test_a_local_value_is_not_the_exported_function_of_the_same_name():
+    src = (b"local M = {}\nlocal state = 'idle'\nlocal function reset() state = 'idle' end\n"
+           b"function M.state() return state end\n"
+           b"function M.ready() reset() return state == 'up', M.state() end\n"
+           b"M.reset = reset\nreturn M\n")
+    e = extract("n.lua", src, "n")
+    assert _refs(e) == {("n.ready", "reset", "calls", ""), ("n.ready", "state", "calls", "")}   # M.state(), not the local
+
+
+def test_a_field_on_the_export_is_not_the_local_function_of_the_same_name():
+    src = (b"local M = {}\nlocal function gps()\n  if not M.gps then M.gps = load() end\n  return M.gps\nend\n"
+           b"function M.find() return gps() end\nreturn M\n")
+    assert _refs(extract("f.lua", src, "f")) == {("f.gps", "load", "calls", "if@3"), ("f.find", "gps", "calls", "")}
