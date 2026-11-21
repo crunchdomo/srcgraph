@@ -200,3 +200,39 @@ def test_method_on_what_a_method_gives_back(tmp_path, monkeypatch):
                                                              "    same = c.fluent()\n    same.by_annotation()\n"})
     assert ("use.g", "oo.Car.build") in e and ("use.g", "oo.Engine.start") in e
     assert ("use.g", "oo.Car.by_annotation") in e
+
+
+NESTED = '''\
+from model import A
+
+
+def outer():
+    def inner(a: A):
+        a.run()
+    return inner
+
+
+def factory():
+    def build():
+        return A()
+    return build
+
+
+def use():
+    made = factory()
+    made.run()
+'''
+
+
+def test_a_nested_function_scopes_its_own_parameters_and_its_calls_belong_to_the_outer(tmp_path, monkeypatch):
+    for name, text in {"model.py": MODEL, "nest.py": NESTED}.items():
+        (tmp_path / name).write_text(text)
+    monkeypatch.chdir(tmp_path)
+    edges = [(e.src.split("::")[-1], e.dst.split("::")[-1]) for e in scan(["."]).edges if e.label == "CALLS"]
+    assert ("nest.outer", "model.A.run") in edges             # the annotation on inner's parameter is read
+    assert not any(dst.startswith("nest.a") for _, dst in edges)   # and `a` is a local, not an unresolved name
+
+
+def test_what_a_nested_function_returns_is_not_what_the_outer_returns(tmp_path, monkeypatch):
+    e = calls(tmp_path, monkeypatch, {"nest.py": NESTED})
+    assert ("nest.use", "model.A.run") not in e               # factory() gives back a function, not an A
