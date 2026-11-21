@@ -239,7 +239,7 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
         return f"{amap[head] if head in amap else f'{unit.name}.{head}'}{dot}{rest}"
 
     def unit_of(sid: str) -> Unit:
-        return units[sid] if sid in units else units[symbols[sid].path]
+        return units[sid] if sid in units else units[sid.split("::")[0]]   # a symbol id opens with its unit's path
 
     bases: dict[str, list[str]] = {}   # class -> the scanned classes it inherits from, in order
     fixtures: set[str] = set()         # functions decorated as pytest fixtures
@@ -252,18 +252,19 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
             elif ref.relation == "decorates" and ref.name.rsplit(".", 1)[-1] == "fixture":
                 fixtures.add(ref.src_id)
 
-    def method_of(cls: str, name: str, seen: tuple[str, ...] = ()) -> str | None:
-        """The method `name` as `cls` would find it: its own, else a base's, depth first in declaration order."""
+    def lineage(cls: str, seen: set[str] | None = None):
+        """A class, then its bases, depth first in declaration order."""
         # ponytail: depth-first, not C3; they differ only for diamonds that override the same method on two branches
-        own = by_qualified.get(("python", "", f"{symbols[cls].qualified}.{name}"))
-        if own is not None:
-            return own
-        for base in bases.get(cls, []):
-            if base not in seen:
-                found = method_of(base, name, (*seen, cls))
-                if found is not None:
-                    return found
-        return None
+        seen = set() if seen is None else seen
+        if cls not in seen:
+            seen.add(cls)
+            yield cls
+            for base in bases.get(cls, []):
+                yield from lineage(base, seen)
+
+    def method_of(cls: str, name: str) -> str | None:
+        """The method `name` as `cls` would find it: its own, else a base's."""
+        return next((m for m in (by_qualified.get(("python", "", f"{symbols[c].qualified}.{name}")) for c in lineage(cls)) if m), None)
 
     def fixture_for(unit: Unit, name: str) -> str | None:
         """pytest's own lookup: the test's module, then conftest.py in its directory and each parent."""
@@ -278,19 +279,35 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
             folder = posixpath.dirname(folder)
         return next((c for c in candidates if c in fixtures), None)
 
-    def class_of(receiver: tuple[str, str], unit: Unit, hops: int = 4) -> str | None:
+    def given_back(sid: str, instance: str | None, hops: int) -> str | None:
+        """The class of what `sid` (a function, variable or class attribute) gives back. A method that returns self
+        gives back the object it was called on, which may be a subclass of the class that defines it."""
+        if sid not in res.returns or not hops:
+            return None
+        got = class_of(res.returns[sid], unit_of(sid), hops - 1)
+        return instance if instance and res.returns[sid][0] == "class" and got in lineage(instance) else got
+
+    def class_of(receiver: tuple, unit: Unit, hops: int = 6) -> str | None:
         """The scanned class a receiver stands for, or None when the code does not say."""
         how, name = receiver
         if how in ("class", "super"):
             return by_qualified.get(("python", "", name))
+        if how in ("enter", "result"):
+            inner, method = (name, "__enter__") if how == "enter" else name
+            cls = class_of(inner, unit, hops - 1) if hops else None
+            found = method_of(cls, method) if cls is not None else None
+            return given_back(found, cls, hops) if found is not None else None
+        if how == "attr":
+            cls = by_qualified.get(("python", "", name[0]))
+            keys = (symbol_id(symbols[c].path, f"{symbols[c].qualified}.{name[1]}") for c in (lineage(cls) if cls else ()))
+            nearest = next((k for k in keys if k in res.returns), None)   # the nearest class that says anything decides
+            return given_back(nearest, None, hops) if nearest else None
         sid = fixture_for(unit, name) if how == "fixture" else resolve(written(unit, name))
         if sid is None or sid not in symbols:
             return None
         if symbols[sid].kind == "class":
             return sid if how != "fixture" else None
-        if how == "type" or not hops or sid not in res.returns:
-            return None
-        return class_of(res.returns[sid], unit_of(sid), hops - 1)   # what calling it, or reading it, gives back
+        return None if how == "type" else given_back(sid, None, hops)   # what calling it, or reading it, gives back
 
     entry_ids: set[str] = set()
     for ex in extractions:
@@ -364,7 +381,7 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
             found = resolve(qualified) if lang == "python" else by_qualified.get((lang, scope(lang, src_unit.path), qualified))
             if found is None and lang == "python" and ref.relation == "calls" and rest and "." not in rest:
                 holder = resolve(base)   # a method on a module variable: `app = Flask()` ... `app.run()`
-                cls = class_of(res.returns[holder], unit_of(holder)) if holder in res.returns else None
+                cls = given_back(holder, None, 6) if holder is not None else None
                 found = method_of(cls, rest) if cls is not None else None
             target = found or unresolved(qualified, lang)
             res.edges.append(Edge(REF_RELATIONS[ref.relation], ref.src_id, target, line=ref.line, guard=guard))

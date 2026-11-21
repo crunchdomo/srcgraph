@@ -153,8 +153,14 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
             return None
         if node.type == "identifier":
             return types[-1].get(_text(node)) if types else None
+        if node.type == "attribute":   # self.attr
+            head, _, attr = (_dotted(node) or "").partition(".")
+            return ("attr", (classes[-1], attr)) if head in ("self", "cls") and classes and attr and "." not in attr else None
         if node.type == "call":
             name = _dotted(node.child_by_field_name("function"))
+            head, _, method = (name or "").partition(".")
+            if name and method and "." not in method and types and head in types[-1]:
+                return ("result", (types[-1][head], method))   # what a method on a known object gives back
             return ("call", name) if name and not is_local(name) else None
         return None
 
@@ -195,6 +201,8 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
             stack.append(qualified if is_class else params(node))
             if not is_class:
                 known = param_types(node, is_test and (fixture or _text(name_node).startswith("test")))
+                if in_class and classes:
+                    known.update({me: ("class", classes[-1]) for me in ("self", "cls")})
                 types.append(known)
                 for pname, (how, what) in known.items():   # pytest calls each fixture on the test's behalf
                     if how == "fixture":
@@ -269,6 +277,10 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
                     # self.m() resolves to the enclosing class's own m; self.attr.m() needs the attribute's type, so it is dropped
                     if classes and method and "." not in method:
                         self_calls.append((owner, f"{classes[-1]}.{method}", lines.line(child.start_byte), guard()))
+                    elif classes and method.count(".") == 1:   # self.attr.m(): an edge if the attribute's class is shown
+                        attr, _, m = method.partition(".")
+                        ex.refs.append(RawRef(owner, m, lines.line(child.start_byte), "calls", guard=guard(),
+                                              receiver=("attr", (classes[-1], attr))))
                 elif name and not is_local(name):
                     ex.refs.append(RawRef(owner, name, lines.line(child.start_byte), "calls", entry=in_main, guard=guard()))
                 elif via_super and classes:
@@ -286,8 +298,40 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
                 in_main = True
                 walk(child, scope, owner, in_class, in_function)
                 in_main = False
+            elif t == "with_item":
+                expr = child.named_children[0] if child.named_children else None
+                bound = None
+                if expr is not None and expr.type == "as_pattern":
+                    target = next((c for c in expr.named_children if c.type == "as_pattern_target"), None)
+                    if target is not None and target.named_children and target.named_children[0].type == "identifier":
+                        bound = _text(target.named_children[0])
+                    expr = expr.named_children[0]
+                value = value_of(expr)
+                if value:   # a with statement calls both, whatever it binds
+                    for dunder in ("__enter__", "__exit__"):
+                        ex.refs.append(RawRef(owner, dunder, lines.line(child.start_byte), "calls", guard=guard(), receiver=value))
+                if bound and scopes:
+                    scopes[-1].add(bound)
+                    types[-1].pop(bound, None)
+                    if value:
+                        types[-1][bound] = ("enter", value)
+                walk(child, scope, owner, in_class, in_function)
+            elif t == "assignment" and in_class and not in_function:   # a class-body annotation or default: `engine: Engine`
+                left = child.child_by_field_name("left")
+                if left is not None and left.type == "identifier":
+                    declared = _type_name(child.child_by_field_name("type"))
+                    value = ("type", declared) if declared else value_of(child.child_by_field_name("right"))
+                    if value:
+                        ex.returns.setdefault(symbol_id(rel_path, f"{scope}.{_text(left)}"), value)
+                walk(child, scope, owner, in_class, in_function)
             elif t in ("assignment", "for_statement", "for_in_clause") and scopes:
                 left = child.child_by_field_name("left")
+                if t == "assignment" and left is not None and left.type == "attribute" and classes:
+                    head, _, attr = (_dotted(left) or "").partition(".")
+                    declared = _type_name(child.child_by_field_name("type"))
+                    value = ("type", declared) if declared else value_of(child.child_by_field_name("right"))
+                    if head == "self" and attr and "." not in attr and value:   # self.attr = Engine()
+                        ex.returns.setdefault(symbol_id(rel_path, f"{classes[-1]}.{attr}"), value)
                 if left is not None and left.type == "identifier":
                     declared = _type_name(child.child_by_field_name("type")) if t == "assignment" else None
                     value = ("type", declared) if declared else value_of(child.child_by_field_name("right")) if t == "assignment" else None

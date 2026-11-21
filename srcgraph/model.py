@@ -96,7 +96,7 @@ class RawRef:
     relation: str
     entry: bool = False   # the call site sits under `if __name__ == "__main__"`
     guard: str = ""   # nearest enclosing if/for/while/try as kind@line, "" when unconditional
-    receiver: tuple[str, str] | None = None   # a method call on an object: `name` is the method, this says what the object is
+    receiver: tuple | None = None   # a method call on an object: `name` is the method, this says what the object is
 
 
 # A receiver says what an object is, in the code's own words; the scanner turns it into a class or draws nothing.
@@ -105,6 +105,9 @@ class RawRef:
 #   ("type", name)         an annotation as written: `a: Flask`
 #   ("call", name)         whatever calling `name` gives back: `x = Flask()`, `x = make_app()`
 #   ("fixture", name)      the pytest fixture a test parameter names
+#   ("attr", (class, attr))        self.attr, typed where the class or a base annotates or assigns it
+#   ("result", (receiver, method)) what a method called on another receiver gives back
+#   ("enter", receiver)            what `with <receiver> as x` binds: the result of its __enter__
 
 
 @dataclass
@@ -117,7 +120,7 @@ class Extraction:
     ast: list[AstNode] = field(default_factory=list)
     ast_edges: list[Edge] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
-    returns: dict[str, tuple[str, str]] = field(default_factory=dict)   # function or variable id -> receiver for its value
+    returns: dict[str, tuple] = field(default_factory=dict)   # function, variable or class.attr id -> receiver for its value
 
 
 def is_test_path(path: str) -> bool:

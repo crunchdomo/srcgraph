@@ -115,3 +115,88 @@ def test_a_pytest_fixture_is_called_for_the_test_and_types_its_parameter(tmp_pat
     assert ("tests.test_x.test_it", "model.A.helper") in e             # a fixture that hands on another fixture
     assert ("tests.conftest.wrapped", "tests.conftest.thing") in e
     assert not any(dst.endswith("Other.run") for _, dst in e)          # `nothing` is no fixture: no edge
+
+
+OO = '''\
+class Engine:
+    def start(self):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        pass
+
+
+class TurboEngine(Engine):
+    def start(self):
+        pass
+
+
+class Opaque:
+    def __enter__(self):
+        return something_unknown()
+
+    def start(self):
+        pass
+
+
+class Car:
+    engine: Engine
+
+    def __init__(self):
+        self.spare = TurboEngine()
+
+    def by_annotation(self):
+        self.engine.start()
+
+    def by_assignment(self):
+        self.spare.start()
+
+    def build(self) -> Engine:
+        return Engine()
+
+    def fluent(self):
+        return self
+
+
+class Van(Car):
+    def inherited_attribute(self):
+        self.spare.start()
+'''
+
+
+def test_method_on_an_attribute_annotated_in_the_class_body(tmp_path, monkeypatch):
+    e = calls(tmp_path, monkeypatch, {"oo.py": OO})
+    assert ("oo.Car.by_annotation", "oo.Engine.start") in e
+
+
+def test_method_on_an_attribute_assigned_in_a_method_even_from_a_subclass(tmp_path, monkeypatch):
+    e = calls(tmp_path, monkeypatch, {"oo.py": OO})
+    assert ("oo.Car.by_assignment", "oo.TurboEngine.start") in e
+    assert ("oo.Van.inherited_attribute", "oo.TurboEngine.start") in e
+    assert ("oo.Car.by_assignment", "oo.Engine.start") not in e
+
+
+def test_with_calls_enter_and_exit_and_types_the_name_it_binds(tmp_path, monkeypatch):
+    e = calls(tmp_path, monkeypatch, {"oo.py": OO, "use.py": "from oo import Engine\n\ndef f():\n    with Engine() as e:\n        e.start()\n"})
+    assert {("use.f", "oo.Engine.__enter__"), ("use.f", "oo.Engine.__exit__"), ("use.f", "oo.Engine.start")} <= e
+
+
+def test_enter_that_returns_self_gives_back_the_subclass_it_was_called_on(tmp_path, monkeypatch):
+    e = calls(tmp_path, monkeypatch, {"oo.py": OO, "use.py": "from oo import TurboEngine\n\ndef f():\n    with TurboEngine() as e:\n        e.start()\n"})
+    assert ("use.f", "oo.TurboEngine.start") in e and ("use.f", "oo.Engine.start") not in e
+
+
+def test_enter_that_returns_something_unknown_types_nothing(tmp_path, monkeypatch):
+    e = calls(tmp_path, monkeypatch, {"oo.py": OO, "use.py": "from oo import Opaque\n\ndef f():\n    with Opaque() as o:\n        o.start()\n"})
+    assert ("use.f", "oo.Opaque.__enter__") in e
+    assert not any(src == "use.f" and dst.endswith(".start") for src, dst in e)
+
+
+def test_method_on_what_a_method_gives_back(tmp_path, monkeypatch):
+    e = calls(tmp_path, monkeypatch, {"oo.py": OO, "use.py": "from oo import Car\n\ndef g():\n    c = Car()\n    e = c.build()\n    e.start()\n"
+                                                             "    same = c.fluent()\n    same.by_annotation()\n"})
+    assert ("use.g", "oo.Car.build") in e and ("use.g", "oo.Engine.start") in e
+    assert ("use.g", "oo.Car.by_annotation") in e
