@@ -14,9 +14,11 @@ def _src(src: str):
 def test_calls_through_parameters_and_locals_are_dropped():
     e = _src("def f(entry, *rest, **kw):\n    conn = make()\n    entry.get(1)\n    conn.run()\n    rest.pop()\n"
              "    for row in rows():\n        row.save()\n")
-    names = {r.name for r in e.refs}
+    names = {r.name for r in e.refs if r.receiver is None}
     assert names == {"make", "rows"}
     assert not [d for d in e.edges if d.label == "CALLS"]
+    # a local built by a call is handed to the scanner with where it came from; parameters and loop variables are not
+    assert [(r.name, r.receiver) for r in e.refs if r.receiver] == [("run", ("call", "make"))]
 
 
 def test_module_level_names_inside_a_function_still_reference():

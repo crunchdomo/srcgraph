@@ -127,6 +127,7 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
         res.edges.extend(ex.edges)
         res.ast.extend(ex.ast)
         res.ast_edges.extend(ex.ast_edges)
+        res.returns.update(ex.returns)
     # Python names are global (module paths); other languages resolve within a directory.
     def scope(lang: str, path: str) -> str:
         return "" if lang == "python" else posixpath.dirname(path)
@@ -231,12 +232,88 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
                 return resolve(".".join([alias, *parts[i + 1:]]), hops - 1) if alias else None
         return None
 
+    def written(unit: Unit, name: str) -> str:
+        """A Python name as written in `unit`, made absolute through that unit's imports."""
+        head, dot, rest = name.partition(".")
+        amap = aliases.get(unit.id, {})
+        return f"{amap[head] if head in amap else f'{unit.name}.{head}'}{dot}{rest}"
+
+    def unit_of(sid: str) -> Unit:
+        return units[sid] if sid in units else units[symbols[sid].path]
+
+    bases: dict[str, list[str]] = {}   # class -> the scanned classes it inherits from, in order
+    fixtures: set[str] = set()         # functions decorated as pytest fixtures
+    for ex in extractions:
+        for ref in ex.refs:
+            if ref.relation == "inherits" and unit_of(ref.src_id).lang == "python":
+                base = resolve(written(unit_of(ref.src_id), ref.name))
+                if base is not None and symbols[base].kind == "class":
+                    bases.setdefault(ref.src_id, []).append(base)
+            elif ref.relation == "decorates" and ref.name.rsplit(".", 1)[-1] == "fixture":
+                fixtures.add(ref.src_id)
+
+    def method_of(cls: str, name: str, seen: tuple[str, ...] = ()) -> str | None:
+        """The method `name` as `cls` would find it: its own, else a base's, depth first in declaration order."""
+        # ponytail: depth-first, not C3; they differ only for diamonds that override the same method on two branches
+        own = by_qualified.get(("python", "", f"{symbols[cls].qualified}.{name}"))
+        if own is not None:
+            return own
+        for base in bases.get(cls, []):
+            if base not in seen:
+                found = method_of(base, name, (*seen, cls))
+                if found is not None:
+                    return found
+        return None
+
+    def fixture_for(unit: Unit, name: str) -> str | None:
+        """pytest's own lookup: the test's module, then conftest.py in its directory and each parent."""
+        candidates = [symbol_id(unit.id, f"{unit.name}.{name}")]
+        folder = posixpath.dirname(unit.id)
+        while True:
+            conftest = posixpath.join(folder, "conftest.py")
+            if conftest in units:
+                candidates.append(symbol_id(conftest, f"{units[conftest].name}.{name}"))
+            if not folder:
+                break
+            folder = posixpath.dirname(folder)
+        return next((c for c in candidates if c in fixtures), None)
+
+    def class_of(receiver: tuple[str, str], unit: Unit, hops: int = 4) -> str | None:
+        """The scanned class a receiver stands for, or None when the code does not say."""
+        how, name = receiver
+        if how in ("class", "super"):
+            return by_qualified.get(("python", "", name))
+        sid = fixture_for(unit, name) if how == "fixture" else resolve(written(unit, name))
+        if sid is None or sid not in symbols:
+            return None
+        if symbols[sid].kind == "class":
+            return sid if how != "fixture" else None
+        if how == "type" or not hops or sid not in res.returns:
+            return None
+        return class_of(res.returns[sid], unit_of(sid), hops - 1)   # what calling it, or reading it, gives back
+
     entry_ids: set[str] = set()
     for ex in extractions:
         for ref in ex.refs:
             src_unit = units[ref.src_id] if ref.src_id in units else units[symbols[ref.src_id].path]
             lang = src_unit.lang
             guard = ref.guard
+            if ref.receiver is not None:   # a method call on an object: an edge when the code says what the object is
+                how, what = ref.receiver
+                cls = class_of(ref.receiver, src_unit)
+                if how == "fixture" and not ref.name:
+                    target = fixture_for(src_unit, what)
+                elif cls is None:
+                    target = None
+                elif how == "super":
+                    target = next((m for m in (method_of(b, ref.name) for b in bases.get(cls, [])) if m), None)
+                else:
+                    target = method_of(cls, ref.name)
+                if target is not None:
+                    res.edges.append(Edge("CALLS", ref.src_id, target, line=ref.line, guard=guard))
+                    if src_unit.test:
+                        entry_ids.add(target)
+                continue
             if lang == "python":
                 head, dot, rest = ref.name.partition(".")
                 amap = aliases.get(src_unit.id, {})
@@ -284,11 +361,21 @@ def scan(roots: list[str], excludes: tuple[str, ...] = DEFAULT_EXCLUDES) -> Extr
                 continue
             else:
                 qualified = ref.name
-            target = (resolve(qualified) if lang == "python" else by_qualified.get((lang, scope(lang, src_unit.path), qualified))
-                      ) or unresolved(qualified, lang)
+            found = resolve(qualified) if lang == "python" else by_qualified.get((lang, scope(lang, src_unit.path), qualified))
+            if found is None and lang == "python" and ref.relation == "calls" and rest and "." not in rest:
+                holder = resolve(base)   # a method on a module variable: `app = Flask()` ... `app.run()`
+                cls = class_of(res.returns[holder], unit_of(holder)) if holder in res.returns else None
+                found = method_of(cls, rest) if cls is not None else None
+            target = found or unresolved(qualified, lang)
             res.edges.append(Edge(REF_RELATIONS[ref.relation], ref.src_id, target, line=ref.line, guard=guard))
             if ref.relation == "calls" and (ref.entry or src_unit.test):
                 entry_ids.add(target)
+            if ref.relation == "calls" and target in symbols and symbols[target].kind == "class":
+                init = method_of(target, "__init__")   # calling a class runs its __init__, its own or a base's
+                if init is not None:
+                    res.edges.append(Edge("CALLS", ref.src_id, init, line=ref.line, guard=guard))
+                    if ref.entry or src_unit.test:
+                        entry_ids.add(init)
     for root in roots:  # console scripts declared in pyproject.toml: "pkg.mod:func"
         try:
             with open(os.path.join(root, "pyproject.toml"), "rb") as fh:

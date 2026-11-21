@@ -377,8 +377,8 @@ def _run(args, out, err) -> int:
             if not rows and args.command in ("callers", "dead"):   # an empty answer comes with its error bar
                 v = repo.query("MATCH ()-[:CALLS]->(t) RETURN count(*) AS n, "
                                "count(CASE WHEN t.kind IN ['unresolved', 'external'] THEN 1 END) AS miss")[0]
-                empty += (f" ({v['n'] - v['miss']} of {v['n']} calls resolved; a method called on anything but self "
-                          f"or a module leaves no edge, so it can look uncalled)")
+                empty += (f" ({v['n'] - v['miss']} of {v['n']} calls resolved; a method called on an object whose "
+                          f"class the code does not show leaves no edge, so it can look uncalled)")
         if not rows:
             print(empty.format(name), file=err)
             return 1
