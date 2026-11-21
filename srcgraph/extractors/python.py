@@ -123,6 +123,7 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
     scopes: list[set[str]] = []                   # parameter and local names of the functions being walked, innermost last
     types: list[dict[str, tuple[str, str]]] = []  # what each of those names is known to be, where the code says so
     is_test = is_test_path(rel_path)
+    nested = 0                                    # how many functions-inside-a-function the walk is inside
     in_main = False                               # walking the body of a module-level `if __name__ == "__main__"`
 
     def is_local(name: str) -> bool:
@@ -223,7 +224,7 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
         return sym.id
 
     def walk(node: Node, scope: str, owner: str, in_class: bool, in_function: bool) -> None:
-        nonlocal in_main
+        nonlocal in_main, nested
         for child in node.children:
             t = child.type
             if t in GUARDS:
@@ -234,6 +235,20 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
                 ex.imports.extend(replace(i, guard=guard()) for i in _imports(child, rel_path, lines))
             elif t in ("function_definition", "class_definition") and not in_function:
                 define(child, scope, owner, in_class)
+            elif t == "function_definition" and in_function:
+                # a function inside a function has no symbol: its calls belong to the outer one. It sees the outer's
+                # names and adds its own parameters, and what it returns is not what the outer returns.
+                inner = child.child_by_field_name("name")
+                if inner is not None:
+                    scopes[-1].add(_text(inner))
+                own, typed = params(child), param_types(child, False)
+                scopes.append(scopes[-1] | own)
+                types.append({k: v for k, v in types[-1].items() if k not in own} | typed)
+                nested += 1
+                walk(child, scope, owner, in_class, in_function)
+                nested -= 1
+                scopes.pop()
+                types.pop()
             elif t == "decorated_definition" and not in_function:
                 definition = child.child_by_field_name("definition")
                 fixture = any(d.type == "decorator" and b"fixture" in d.text for d in child.children)
@@ -343,7 +358,7 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
                         types[-1].pop(_text(left), None)
                 walk(child, scope, owner, in_class, in_function)
             elif t in ("return_statement", "yield") and types and child.named_children:
-                value = value_of(child.named_children[0])
+                value = value_of(child.named_children[0]) if not nested else None
                 if value:
                     ex.returns.setdefault(owner, value)   # a declared return type, set first, is never overridden
                 walk(child, scope, owner, in_class, in_function)
