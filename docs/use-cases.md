@@ -284,8 +284,8 @@ What the graph still cannot see, and so what these lists can be wrong about:
 
 - A method called on anything but `self` or a module. There is no type information, so
   `session.request(...)` on a local leaves no edge. The empty answers say so:
-  `no callers of X (896 of 1801 calls resolved; a method called on anything but self or a module
-  leaves no edge, so it can look uncalled)`.
+  `no callers of X (896 of 1801 calls resolved; a method called on an object whose class the code
+  does not show leaves no edge, so it can look uncalled)`.
 - Names looked up with `getattr(module, name)`. The module gets a `REFERENCES` edge and its public
   functions are kept out of `dead`, but nothing says which one is called.
 - An `__all__` or a registry built at runtime.

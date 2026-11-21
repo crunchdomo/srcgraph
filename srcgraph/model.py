@@ -96,6 +96,15 @@ class RawRef:
     relation: str
     entry: bool = False   # the call site sits under `if __name__ == "__main__"`
     guard: str = ""   # nearest enclosing if/for/while/try as kind@line, "" when unconditional
+    receiver: tuple[str, str] | None = None   # a method call on an object: `name` is the method, this says what the object is
+
+
+# A receiver says what an object is, in the code's own words; the scanner turns it into a class or draws nothing.
+#   ("class", qualified)   the enclosing class, for self.m() the class itself does not define
+#   ("super", qualified)   the enclosing class's bases, for super().m()
+#   ("type", name)         an annotation as written: `a: Flask`
+#   ("call", name)         whatever calling `name` gives back: `x = Flask()`, `x = make_app()`
+#   ("fixture", name)      the pytest fixture a test parameter names
 
 
 @dataclass
@@ -108,6 +117,7 @@ class Extraction:
     ast: list[AstNode] = field(default_factory=list)
     ast_edges: list[Edge] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    returns: dict[str, tuple[str, str]] = field(default_factory=dict)   # function or variable id -> receiver for its value
 
 
 def is_test_path(path: str) -> bool:

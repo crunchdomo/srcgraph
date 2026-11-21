@@ -6,17 +6,19 @@ Checks of srcgraph's answers against something srcgraph did not produce.
 
 How often is `srcgraph untested` right? The answer key is what `coverage` saw the project's own tests execute. Usage is in the script's docstring.
 
-Results on 2026-11-21, srcgraph 0.2.0:
+Results on 2026-11-21, Flask at `49943b5` and srcgraph itself:
 
-| | Flask (`49943b5`) | srcgraph itself |
-|---|---|---|
-| Functions judged | 322 | 99 |
-| srcgraph says untested | 290 | 40 |
-| ...and tests really never ran them | 16 (6%) | 2 (5%) |
-| Functions the tests ran | 305 | 96 |
-| ...that srcgraph had reached from a test | 31 (10%) | 58 (60%) |
-| Functions with no symbol in the graph (nested, earlier `@overload`) | 55, of which 34 ran | 54, of which 49 ran |
+| | Flask, 0.2.0 | Flask, typed receivers | srcgraph, 0.2.0 | srcgraph, typed receivers |
+|---|---|---|---|---|
+| Functions the tests ran | 305 | 305 | 96 | 97 |
+| ...that srcgraph had reached from a test | 31 (10%) | 112 (37%) | 58 (60%) | 80 (82%) |
+| srcgraph says untested | 290 | 209 | 40 | 19 |
+| ...and tests really never ran them | 16 (6%) | 16 (8%) | 2 (5%) | 2 (11%) |
 
-So an `untested` row is wrong about nineteen times in twenty on both projects. The cause is the one `srcgraph callers` already prints: a method called on anything but `self` or a module leaves no edge. Tests mostly build an object and call methods on it (`app = Flask(...)`, `app.test_client()`), and a constructor call does not reach `__init__`.
+"Typed receivers" is the change that follows an object to its class when the code says what it is: `x = A()`, an annotation, a function's return, a pytest fixture, `self.m()` and `super().m()` through base classes, and a class call reaching `__init__`.
 
-Read with care: this judges one preset on two projects. Nothing here measures `importers`, `scope`, `domains` or any query that does not walk CALLS.
+How to read it:
+
+- An `untested` row is still usually wrong. Do not use `untested` as a coverage report; `coverage` answers that question exactly.
+- What is left on Flask is mostly dispatch the code never spells out: the test client calls into werkzeug, which calls `app.__call__`, and everything below it (`wsgi_app`, `dispatch_request`, the handlers) hangs off that one edge. No static reading of Flask's own code shows it.
+- This judges one preset on two projects. Nothing here measures `importers`, `scope`, `domains` or any query that does not walk CALLS.

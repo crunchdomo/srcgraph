@@ -37,6 +37,34 @@ def _dotted(node: Node) -> str | None:
     return None
 
 
+WRAPPERS = {"Optional", "Iterator", "Generator", "Iterable", "AsyncIterator", "AsyncGenerator"}
+
+
+def _type_name(node: Node | None) -> str | None:
+    """The one class an annotation names, as written: `A`, `"A"`, `A | None`, `Optional[A]`, `Iterator[A]`. None when
+    it names several or none: a missing edge is preferred to a guessed one."""
+    if node is None:
+        return None
+    t = node.type
+    if t in ("identifier", "attribute"):
+        return _dotted(node)
+    if t == "string":
+        content = next((c for c in node.children if c.type == "string_content"), None)
+        text = _text(content).strip() if content is not None else ""
+        return text if re.fullmatch(r"[A-Za-z_][\w.]*", text) else None
+    if t in ("union_type", "binary_operator"):
+        names = [_type_name(c) for c in node.named_children if c.text != b"None"]
+        return names[0] if len(names) == 1 else None
+    if t in ("generic_type", "subscript"):
+        head, *inner = node.named_children
+        if (_dotted(head) or "").rsplit(".", 1)[-1] not in WRAPPERS or not inner:
+            return None
+        while inner[0].type in ("type_parameter", "type") and inner[0].named_children:
+            inner = inner[0].named_children
+        return _type_name(inner[0])
+    return _type_name(node.named_children[0]) if t == "type" and node.named_children else None
+
+
 def _doc(body: Node | None) -> str:
     """First paragraph of the docstring opening `body` (a module or a block), whitespace collapsed; "" if none."""
     first = next((c for c in body.named_children if c.type != "comment"), None) if body is not None else None
@@ -93,6 +121,8 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
     classes: list[str] = []                       # qualified names of the classes being walked, innermost last
     self_calls: list[tuple[str, str, int]] = []   # (owner, candidate method qualified, line), checked once all methods are known
     scopes: list[set[str]] = []                   # parameter and local names of the functions being walked, innermost last
+    types: list[dict[str, tuple[str, str]]] = []  # what each of those names is known to be, where the code says so
+    is_test = is_test_path(rel_path)
     in_main = False                               # walking the body of a module-level `if __name__ == "__main__"`
 
     def is_local(name: str) -> bool:
@@ -102,6 +132,31 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
         p = node.child_by_field_name("parameters")
         ids = [next((x for x in c.children if x.type == "identifier"), c) for c in (p.named_children if p is not None else [])]
         return {_text(i) for i in ids if i.type == "identifier"}
+
+    def param_types(node: Node, inject: bool) -> dict[str, tuple[str, str]]:
+        """Annotated parameters by their annotation; in a pytest test or fixture, the rest by the fixture they name."""
+        out: dict[str, tuple[str, str]] = {}
+        p = node.child_by_field_name("parameters")
+        for c in (p.named_children if p is not None else []):
+            if c.type in ("typed_parameter", "typed_default_parameter"):
+                ident = c.child_by_field_name("name") or next((x for x in c.children if x.type == "identifier"), None)
+                name = _type_name(c.child_by_field_name("type"))
+                if ident is not None and ident.type == "identifier" and name:
+                    out[_text(ident)] = ("type", name)
+            elif inject and c.type == "identifier" and _text(c) not in ("self", "cls"):
+                out[_text(c)] = ("fixture", _text(c))
+        return out
+
+    def value_of(node: Node | None) -> tuple[str, str] | None:
+        """What an expression gives back: a local already known, or the result of calling a name."""
+        if node is None:
+            return None
+        if node.type == "identifier":
+            return types[-1].get(_text(node)) if types else None
+        if node.type == "call":
+            name = _dotted(node.child_by_field_name("function"))
+            return ("call", name) if name and not is_local(name) else None
+        return None
 
     def symbol(node: Node, qualified: str, kind: str, doc: str = "") -> Symbol:
         name = qualified.rsplit(".", 1)[-1]
@@ -113,7 +168,7 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
     GUARDS = {"if_statement": "if", "for_statement": "for", "while_statement": "while", "try_statement": "try"}
     guards: list[str] = []
 
-    def define(node: Node, scope: str, owner: str, in_class: bool) -> str | None:
+    def define(node: Node, scope: str, owner: str, in_class: bool, fixture: bool = False) -> str | None:
         """Create the symbol for a function/class definition node, walk its body, return the symbol id."""
         name_node = node.child_by_field_name("name")
         if name_node is None:
@@ -138,6 +193,15 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
             is_class = node.type == "class_definition"
             stack = classes if is_class else scopes
             stack.append(qualified if is_class else params(node))
+            if not is_class:
+                known = param_types(node, is_test and (fixture or _text(name_node).startswith("test")))
+                types.append(known)
+                for pname, (how, what) in known.items():   # pytest calls each fixture on the test's behalf
+                    if how == "fixture":
+                        ex.refs.append(RawRef(sym.id, "", sym.line, "calls", receiver=("fixture", what)))
+                declared = _type_name(node.child_by_field_name("return_type"))
+                if declared:
+                    ex.returns[sym.id] = ("type", declared)
             guards.append("")
             for field in ("parameters", "return_type"):   # annotations and defaults name things; parameter names are local
                 part = node.child_by_field_name(field)
@@ -146,6 +210,8 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
             walk(body, qualified, sym.id, is_class, not is_class)
             guards.pop()
             stack.pop()
+            if not is_class:
+                types.pop()
         return sym.id
 
     def walk(node: Node, scope: str, owner: str, in_class: bool, in_function: bool) -> None:
@@ -162,7 +228,8 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
                 define(child, scope, owner, in_class)
             elif t == "decorated_definition" and not in_function:
                 definition = child.child_by_field_name("definition")
-                sym_id = define(definition, scope, owner, in_class) if definition is not None else None
+                fixture = any(d.type == "decorator" and b"fixture" in d.text for d in child.children)
+                sym_id = define(definition, scope, owner, in_class, fixture) if definition is not None else None
                 for deco in child.children:
                     if deco.type != "decorator":
                         continue
@@ -182,11 +249,18 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
                     sym = symbol(child.named_children[0], f"{scope}.{_text(left)}", "variable")
                     ex.symbols.append(sym)
                     ex.edges.append(Edge("CONTAINS", owner, sym.id))
+                    declared = _type_name(child.named_children[0].child_by_field_name("type"))
+                    value = ("type", declared) if declared else value_of(child.named_children[0].child_by_field_name("right"))
+                    if value:
+                        ex.returns[sym.id] = value
                 walk(child, scope, owner, in_class, in_function)
             elif t == "call":
-                name = _dotted(child.child_by_field_name("function"))
+                fn = child.child_by_field_name("function")
+                name = _dotted(fn)
                 head, _, method = name.partition(".") if name else ("", "", "")
                 args = child.child_by_field_name("arguments")
+                via_super = fn is not None and fn.type == "attribute" and fn.child_by_field_name("object").type == "call" \
+                    and _dotted(fn.child_by_field_name("object").child_by_field_name("function")) == "super"
                 if name == "getattr" and args is not None and args.named_children and args.named_children[0].type == "identifier":
                     mod = _text(args.named_children[0])
                     if mod not in ("self", "cls") and not is_local(mod):
@@ -197,6 +271,12 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
                         self_calls.append((owner, f"{classes[-1]}.{method}", lines.line(child.start_byte), guard()))
                 elif name and not is_local(name):
                     ex.refs.append(RawRef(owner, name, lines.line(child.start_byte), "calls", entry=in_main, guard=guard()))
+                elif via_super and classes:
+                    ex.refs.append(RawRef(owner, _text(fn.child_by_field_name("attribute")), lines.line(child.start_byte),
+                                          "calls", guard=guard(), receiver=("super", classes[-1])))
+                elif name and method and "." not in method and types and head in types[-1]:
+                    ex.refs.append(RawRef(owner, method, lines.line(child.start_byte), "calls", guard=guard(),
+                                          receiver=types[-1][head]))
                 else:
                     walk(child, scope, owner, in_class, in_function)
                     continue
@@ -209,7 +289,19 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
             elif t in ("assignment", "for_statement", "for_in_clause") and scopes:
                 left = child.child_by_field_name("left")
                 if left is not None and left.type == "identifier":
+                    declared = _type_name(child.child_by_field_name("type")) if t == "assignment" else None
+                    value = ("type", declared) if declared else value_of(child.child_by_field_name("right")) if t == "assignment" else None
                     scopes[-1].add(_text(left))
+                    # ponytail: the last assignment wins, whatever branch it sits in; an unknown value forgets the type
+                    if value:
+                        types[-1][_text(left)] = value
+                    else:
+                        types[-1].pop(_text(left), None)
+                walk(child, scope, owner, in_class, in_function)
+            elif t in ("return_statement", "yield") and types and child.named_children:
+                value = value_of(child.named_children[0])
+                if value:
+                    ex.returns.setdefault(owner, value)   # a declared return type, set first, is never overridden
                 walk(child, scope, owner, in_class, in_function)
             elif t == "identifier":
                 parent, name = child.parent, _text(child)
@@ -233,6 +325,10 @@ def extract(rel_path: str, source: bytes, module_name: str) -> Extraction:
 
     walk(tree.root_node, module_name, rel_path, False, False)
     defined = {s.qualified for s in ex.symbols}
-    ex.edges.extend(Edge("CALLS", owner, symbol_id(rel_path, target), line, guard=g)
-                    for owner, target, line, g in self_calls if target in defined)
+    for owner, target, line, g in self_calls:
+        if target in defined:
+            ex.edges.append(Edge("CALLS", owner, symbol_id(rel_path, target), line, guard=g))
+        else:   # not this class's own: perhaps a base's, which only the scanner can see
+            cls, _, method = target.rpartition(".")
+            ex.refs.append(RawRef(owner, method, line, "calls", guard=g, receiver=("class", cls)))
     return ex
