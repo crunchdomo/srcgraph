@@ -143,7 +143,7 @@ g.load_edges([Edge("GOVERNS", "ADR-1", "src/gateway/client.py")])
 
 ## Performance
 
-A 17k-line repo builds its full two-tier graph (110k syntax nodes) in about 3 seconds. Django at 531k lines (3.0M syntax nodes, 4.5M edges) builds in about 25 seconds into a 630 MB file; 2-hop queries answer in tens of milliseconds.
+A 17k-line repo builds its full two-tier graph (110k syntax nodes) in about 3 seconds. Django at 532k lines (3.0M syntax nodes) builds in about 170 seconds into a 680 MB file, measured on an M1 Pro with LadybugDB 0.22.1; 2-hop queries answer in tens of milliseconds. Nearly all of that time and size is the syntax tier: about 99% of the nodes are syntax nodes.
 
 ## Adding a language
 
